@@ -1,0 +1,14 @@
+node_modules
+dist
+dev-dist
+coverage
+playwright-report
+test-results
+public/mediapipe/wasm
+*.local
+.DS_Store
+.vite
+tests/fixtures/video/*.y4m
+tests/fixtures/video/*.webm
+.impeccable/
+docs/evaluation/*.tmp
