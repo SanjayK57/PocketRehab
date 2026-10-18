@@ -10,5 +10,4 @@ public/mediapipe/wasm
 .vite
 tests/fixtures/video/*.y4m
 tests/fixtures/video/*.webm
-.impeccable/
 docs/evaluation/*.tmp

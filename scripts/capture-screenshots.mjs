@@ -1,4 +1,4 @@
-// Captures README screenshots from a running dev server (npm run dev) using the demo profile.
+// Captures docs screenshots from a running dev server (npm run dev) using the demo profile.
 // Usage: node scripts/capture-screenshots.mjs [baseUrl]
 import { chromium, devices } from '@playwright/test';
 import { mkdirSync } from 'node:fs';

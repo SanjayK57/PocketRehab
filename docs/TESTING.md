@@ -29,7 +29,6 @@ npm run build                     # production build in dist/
 | Evaluation harness (`npm run evaluate`) | Pass; results in `docs/EVALUATION.md` |
 | Production build (`vite build` + PWA) | Pass; service worker precaches 34 files (≈2.4 MB); pose model cached on first use |
 | Browser tests (Playwright, desktop + phone + tablet viewports) | **13 passed, 0 failed**, 2 skipped (the keyboard test is skipped on the two touch-device emulations by design), 1.6 min |
-| Impeccable design detector (`impeccable detect src`) | 0 findings |
 
 ### What the unit and integration tests cover (83)
 
@@ -83,7 +82,7 @@ npm run build                     # production build in dist/
 | Responsive and keyboard accessible | Tested at three viewport sizes and with the keyboard; focus rings visible |
 | No placeholder buttons, fake integrations, hard-coded credentials or unnecessary dependencies | None found. No API keys exist; every dependency has a stated purpose (`docs/ARCHITECTURE.md`) |
 | Camera footage never stored or uploaded | Frames are only drawn to the screen and passed to the in-browser model; there is no upload code and no recording code |
-| Installable and runnable from the README | `npm install && npm run dev` was used throughout; the GitHub Pages build is produced by the workflow |
+| Installable and runnable locally | `npm install && npm run dev` was used throughout; the GitHub Pages build is produced by the workflow |
 
 ## Not tested
 

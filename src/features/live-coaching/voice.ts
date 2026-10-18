@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Voice coach output (speech synthesis) and optional voice commands (speech
  * recognition). Both are optional: captions always show the same text, and

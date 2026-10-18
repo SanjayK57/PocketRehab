@@ -3,6 +3,27 @@ import type { ExerciseDefinition } from '@/types/exercise';
 import type { BodySide, TargetRange } from '@/lib/validation/schemas';
 import type { FigureScene, PoseInput, SceneMode } from './scene';
 
+let hardwareGl: boolean | null = null;
+
+/**
+ * True when WebGL runs on a real GPU. Software renderers (SwiftShader, llvmpipe)
+ * draw the studio scene at a few frames per second and freeze the page, so they
+ * get the 2D figure instead.
+ */
+export function canRender3D(): boolean {
+  if (hardwareGl !== null) return hardwareGl;
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+    const renderer = gl && ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    hardwareGl = !!gl && !/swiftshader|llvmpipe|software|basic render/i.test(renderer);
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  } catch {
+    hardwareGl = false;
+  }
+  return hardwareGl;
+}
+
 /**
  * Renders the 3D figure for a pose supplied each animation frame by `getPose`.
  * three.js loads on first use, rendering pauses while the figure is off-screen
@@ -31,7 +52,7 @@ export function Figure3D({
   label: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState(() => !canRender3D());
   const getPoseRef = useRef(getPose);
   const animateRef = useRef(animateCamera);
   useLayoutEffect(() => {
@@ -46,12 +67,19 @@ export function Figure3D({
     let raf = 0;
     let visible = true;
     let cancelled = false;
+    let frames = 0;
+    let slow = 0;
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       if (!scene || !visible || document.hidden) return;
       const pose = getPoseRef.current();
-      if (pose) scene.render(pose, now, animateRef.current);
+      if (!pose) return;
+      const t0 = performance.now();
+      scene.render(pose, now, animateRef.current);
+      // A device that cannot keep up gets the 2D figure rather than a frozen page.
+      slow = slow * 0.9 + (performance.now() - t0) * 0.1;
+      if (++frames > 30 && slow > 45) setFailed(true);
     };
     const size = () => scene?.resize(canvas.clientWidth, canvas.clientHeight);
     const resizeObs = new ResizeObserver(size);

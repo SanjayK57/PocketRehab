@@ -1,10 +1,10 @@
 {
   "clip": "Jumping jacks and burpees (Taco fleur, CC BY-SA 4.0), first 20 s looped, 480x360 @ 15 fps",
-  "ranAt": "2026-10-17T21:58:33.645Z",
+  "ranAt": "2026-10-18T23:53:55.572Z",
   "fpsText": "Tracking at 3 frames/s (GPU)",
-  "angleText": "Arm angle146°",
-  "reliableText": "93% of frames had reliable tracking.",
-  "repsText": "Repetitions counted8 of 50Only movements that met the counting criteria",
-  "notCountedText": "Movements not counted5",
+  "angleText": "Arm angle97°",
+  "reliableText": "91% of frames had reliable tracking.",
+  "repsText": "Repetitions counted0 of 50Only movements that met the counting criteria",
+  "notCountedText": "Movements not counted19",
   "pageErrors": []
 }

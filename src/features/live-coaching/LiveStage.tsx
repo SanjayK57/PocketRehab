@@ -18,6 +18,7 @@ import { FormCueGate, TRAFFIC_LIGHT_TEXT, trafficLight, type CoachEvent, type Co
 import type { GuidePhase, LiveForm } from '@/types/form';
 import { useReducedMotion } from '@/app/usePreferencesEffect';
 import { SimulatedStage } from '@/features/simulation/SimulatedStage';
+import { canRender3D } from '@/features/simulation/Figure3D';
 import type { MachineEvent, MachineState } from './sessionMachine';
 import { startVoiceCommands } from './voice';
 
@@ -219,7 +220,7 @@ export function LiveStage({
             stage,
             setupFitted: readySince.current !== null,
             mirrored,
-            showBody: mode !== 'simulated',
+            showBody: mode !== 'simulated' || !canRender3D(),
             showInstruments: sample.points !== null,
             reducedMotion: reducedRef.current,
             now: t,
@@ -389,7 +390,7 @@ export function LiveStage({
       <div className="min-w-0">
         <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-stage text-stage-ink sm:aspect-video">
           {mode === 'camera' ? <video ref={videoRef} className="absolute inset-0 size-full object-cover" style={{ transform: mirrored ? 'scaleX(-1)' : undefined }} muted playsInline aria-label="Live camera preview" /> : null}
-          {mode === 'simulated' ? <SimulatedStage frameRef={frameRef} def={def} side={side} reducedMotion={reduced} className="absolute inset-0 size-full" /> : null}
+          {mode === 'simulated' && canRender3D() ? <SimulatedStage frameRef={frameRef} def={def} side={side} reducedMotion={reduced} className="absolute inset-0 size-full" /> : null}
           <canvas ref={canvasRef} className="absolute inset-0 size-full" aria-hidden />
           {mode === 'simulated' ? (
             <p className="absolute left-3 top-3 rounded-full bg-signal px-3 py-1 text-sm font-bold text-white">Simulated demo · not your camera</p>

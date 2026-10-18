@@ -1,6 +1,6 @@
 # PocketRehab design system: "Applied Tape"
 
-Chosen through the Impeccable design process (concept roll, six outside challengers, user choice on 2026-10-17). The world is **kinesiology tape laid on a physio's printed backing paper**. It lends PocketRehab four things only: type, palette, density and one signature move. Navigation, controls and layout stay ordinary web-app patterns.
+The world is **kinesiology tape laid on a physio's printed backing paper**. It lends PocketRehab four things only: type, palette, density and one signature move. Navigation, controls and layout stay ordinary web-app patterns.
 
 ## Signature move
 
