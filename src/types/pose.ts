@@ -25,11 +25,25 @@ export interface PoseProviderInfo {
   delegate?: string;
 }
 
+/**
+ * A landmark in metric 3D "world" coordinates (metres), origin at the hip
+ * midpoint, as returned by MediaPipe's pose world landmarks: x to the image
+ * right, y down, z away from the camera. Used for rotation-robust angles.
+ */
+export interface WorldLandmark {
+  x: number;
+  y: number;
+  z: number;
+  visibility: number;
+}
+
 export interface PoseFrame {
   /** Monotonic timestamp in milliseconds. */
   timestamp: number;
   /** 33 landmarks in MediaPipe BlazePose order, or null when no person was detected. */
   landmarks: Landmark[] | null;
+  /** The same 33 landmarks in metric world coordinates, when the provider supplies them. */
+  world?: WorldLandmark[] | null;
   imageWidth: number;
   imageHeight: number;
   provider: PoseProviderInfo;

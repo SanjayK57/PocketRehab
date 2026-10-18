@@ -20,7 +20,7 @@ test('real person via fake camera: detection, setup checks, live measurement', a
   test.skip(!existsSync(video), 'Run sh scripts/fetch-test-video.sh to download the test clip');
   test.setTimeout(240_000);
   const browser = await chromium.launch({
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-video-capture=${video}`],
+    args: ['--mute-audio', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-video-capture=${video}`],
   });
   const context = await browser.newContext({ permissions: ['camera'], baseURL: 'http://localhost:4173', viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
   const page = await context.newPage();

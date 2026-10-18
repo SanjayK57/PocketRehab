@@ -16,6 +16,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     serviceWorkers: 'block',
+    // The coach speaks; keep test runs silent.
+    launchOptions: { args: ['--mute-audio'] },
   },
   webServer: {
     command: 'npm run build && npx vite preview --port 4173 --strictPort',

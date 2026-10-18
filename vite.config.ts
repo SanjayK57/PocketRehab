@@ -56,6 +56,17 @@ export default defineConfig({
               cacheableResponse: { statuses: [200] },
             },
           },
+          // Coach voice: the clip list can change between releases; the clips themselves never do (content-hashed names).
+          {
+            urlPattern: ({ url }) => url.pathname.endsWith('/voice/manifest.json'),
+            handler: 'NetworkFirst',
+            options: { cacheName: 'pocketrehab-voice-manifest', cacheableResponse: { statuses: [200] } },
+          },
+          {
+            urlPattern: ({ url }) => url.pathname.includes('/voice/') && url.pathname.endsWith('.mp3'),
+            handler: 'CacheFirst',
+            options: { cacheName: 'pocketrehab-voice', expiration: { maxEntries: 400 }, cacheableResponse: { statuses: [200] } },
+          },
         ],
       },
     }),

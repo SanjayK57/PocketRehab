@@ -29,7 +29,7 @@ test('camera permission denied shows an honest fallback', async ({ page, context
 
 test('fake camera: on-device pose model loads and setup refuses an empty scene', async () => {
   test.setTimeout(180_000);
-  const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+  const browser = await chromium.launch({ args: ['--mute-audio', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
   const context = await browser.newContext({ permissions: ['camera'], baseURL: 'http://localhost:4173', viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
   // Record every camera stream the page opens so we can check they are all stopped afterwards.
   await context.addInitScript(() => {

@@ -17,7 +17,7 @@ import { CoachThrottle, selectMessage, type CoachEvent, type CoachMessage } from
 import { initialState, sessionReducer, sessionStatusFor, type SessionMode } from './sessionMachine';
 import { LiveStage } from './LiveStage';
 import { SessionSummary } from './SessionSummary';
-import { speak, stopSpeaking } from './voice';
+import { loadVoicePack, primeVoice, speak, stopSpeaking } from './voice';
 import type { StageStats } from './usePoseStage';
 import { useToast } from '@/components/Toast';
 
@@ -217,6 +217,10 @@ export function LiveSessionPage() {
     }
   }, [machine, coach, persist]);
 
+  useEffect(() => {
+    void loadVoicePack();
+  }, []);
+
   // Leaving the page mid-session keeps what was measured and marks it interrupted.
   useEffect(
     () => () => {
@@ -249,8 +253,13 @@ export function LiveSessionPage() {
     );
   }
 
-  const choose = (mode: SessionMode) => dispatch({ type: 'CHOOSE_MODE', mode });
+  // Choosing a mode is a click, which is when browsers allow the page to start playing sound.
+  const choose = (mode: SessionMode) => {
+    primeVoice();
+    dispatch({ type: 'CHOOSE_MODE', mode });
+  };
   const switchMode = (mode: 'simulated' | 'manual') => {
+    primeVoice();
     // Restart the workflow in the new mode; the pre-session check-in already happened.
     dispatch({ type: 'BACK_TO_INTRO' });
     dispatch({ type: 'CHOOSE_MODE', mode });

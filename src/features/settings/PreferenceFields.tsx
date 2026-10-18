@@ -1,8 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import type { Preferences } from '@/lib/validation/schemas';
 import { ChoiceGroup, Field, Select, Toggle } from '@/components/ui';
-import { listVoices, speak, speechSupported } from '@/features/live-coaching/voice';
-import { recognitionSupported } from '@/features/live-coaching/voice';
+import { DEVICE_VOICE_AUTO, listVoices, primeVoice, recognitionSupported, speak, speechSupported } from '@/features/live-coaching/voice';
 import { Button } from '@/components/ui';
 
 /** Coaching and accessibility preferences. Shared by onboarding and Settings. */
@@ -13,7 +12,7 @@ export function PreferenceFields({ value, onChange, compact }: { value: Preferen
   const canSpeak = speechSupported();
 
   useEffect(() => {
-    if (!canSpeak) return;
+    if (!canSpeak || !('speechSynthesis' in window)) return;
     const update = () => setVoices(listVoices());
     window.speechSynthesis.addEventListener?.('voiceschanged', update);
     return () => window.speechSynthesis.removeEventListener?.('voiceschanged', update);
@@ -107,7 +106,8 @@ export function PreferenceFields({ value, onChange, compact }: { value: Preferen
         {canSpeak && value.voiceEnabled ? (
           <Field label="Voice" htmlFor={`${id}-voice`}>
             <Select id={`${id}-voice`} value={value.voiceURI ?? ''} onChange={(e) => set({ voiceURI: e.target.value || null })}>
-              <option value="">Browser default</option>
+              <option value="">PocketRehab coach (natural voice)</option>
+              <option value={DEVICE_VOICE_AUTO}>This device’s voice (automatic)</option>
               {voices.map((v) => (
                 <option key={v.voiceURI} value={v.voiceURI}>
                   {v.name}
@@ -120,7 +120,11 @@ export function PreferenceFields({ value, onChange, compact }: { value: Preferen
           <Field label={`Speaking speed (${value.speechRate.toFixed(1)}×)`} htmlFor={`${id}-rate`}>
             <div className="flex items-center gap-3">
               <input id={`${id}-rate`} type="range" min={0.6} max={1.4} step={0.1} value={value.speechRate} onChange={(e) => set({ speechRate: Number(e.target.value) })} className="w-full" />
-              <Button variant="secondary" size="sm" onClick={() => speak('This is how your coach will sound.', { rate: value.speechRate, voiceURI: value.voiceURI, interrupt: true })}>
+              <Button variant="secondary" size="sm" onClick={() => {
+                  primeVoice();
+                  speak('This is how your coach will sound.', { rate: value.speechRate, voiceURI: value.voiceURI, interrupt: true });
+                }}
+              >
                 Test
               </Button>
             </div>
