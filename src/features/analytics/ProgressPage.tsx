@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { NavLink } from 'react-router-dom';
 import { Award } from 'lucide-react';
 import type { BodySide, ExerciseId, Session } from '@/lib/validation/schemas';
 import { useAppData } from '@/app/AppData';
@@ -10,31 +9,24 @@ import { addDays, dateKey, formatDate, todayKey, weekStart } from '@/lib/time/da
 import { adherence, buildSchedule, countsTowardAdherence } from '@/features/scheduling/schedule';
 import { BarChart, ChartFigure, Legend, LineChart } from '@/components/charts';
 import { RangeStrips, TapeSwatch } from '@/components/tape';
-import { ErrorState, KeyValue, LinkButton, LoadingBlock, PageHeader, Section, Select, cx } from '@/components/ui';
+import { ErrorState, KeyValue, LinkButton, LoadingBlock, PageHeader, Section, Select, TabNav, cx } from '@/components/ui';
 import { INSUFFICIENT_DATA_MESSAGE, PLATEAU_RULE_TEXT, interpretChange, isStable, measurableSessions, series, sideComparison } from './analysis';
 import { achievements } from './weekly';
 import { formatDuration } from '@/lib/time/dates';
 
 export function ProgressTabs() {
-  const tabs = [
-    { to: '/progress', label: 'Overview', end: true },
-    { to: '/progress/history', label: 'Session history' },
-    { to: '/progress/compare', label: 'Compare sessions' },
-    { to: '/progress/week', label: 'Weekly summary' },
-    { to: '/progress/report', label: 'Report for my clinician' },
-  ];
   return (
-    <nav aria-label="Progress sections" className="-mt-4 mb-8 overflow-x-auto border-b border-rule">
-      <ul className="flex min-w-max gap-1">
-        {tabs.map((t) => (
-          <li key={t.to}>
-            <NavLink to={t.to} end={t.end} className={({ isActive }) => cx('-mb-px inline-flex min-h-11 items-center border-b-[3px] px-3 font-semibold transition-colors', isActive ? 'border-tape text-ink' : 'border-transparent text-ink-2 hover:text-ink')}>
-              {t.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <TabNav
+      label="Progress sections"
+      tabs={[
+        { to: '/progress', label: 'Overview', end: true },
+        { to: '/progress/history', label: 'Session history', short: 'History' },
+        { to: '/progress/compare', label: 'Compare sessions', short: 'Compare' },
+        { to: '/progress/week', label: 'Weekly summary', short: 'Week' },
+        { to: '/progress/measurements', label: 'Your measurements', short: 'Readings' },
+        { to: '/progress/report', label: 'Report for my clinician', short: 'Report' },
+      ]}
+    />
   );
 }
 

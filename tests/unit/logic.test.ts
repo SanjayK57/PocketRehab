@@ -1,23 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { closeDb, DB_NAME, getDb } from '@/lib/storage/db';
-import {
-  addPlanVersion,
-  clearAllData,
-  deleteSession,
-  exportAllData,
-  getCurrentPlan,
-  getProfile,
-  importAllData,
-  listCheckIns,
-  listPlanVersions,
-  listSessions,
-  recoverInterruptedSessions,
-  removeDemoData,
-  saveCheckIn,
-  saveProfile,
-  saveSession,
-  storageHealth,
-} from '@/lib/storage/repositories';
+import { describe, expect, it } from 'vitest';
 import { evaluateSafety } from '@/lib/safety/checkins';
 import { CoachThrottle, selectMessage, trafficLight } from '@/features/live-coaching/coach';
 import { adherence, buildIcs, buildSchedule, rescheduleConflict } from '@/features/scheduling/schedule';
@@ -30,98 +11,7 @@ import { EXERCISES } from '@/features/exercises/library';
 import { makeCheckIn, makePlan, makeProfile, makeSession } from '../fixtures/factories';
 import type { Repetition } from '@/lib/validation/schemas';
 
-async function resetDb() {
-  await closeDb();
-  await new Promise<void>((resolve) => {
-    const req = indexedDB.deleteDatabase(DB_NAME);
-    req.onsuccess = () => resolve();
-    req.onerror = () => resolve();
-    req.onblocked = () => resolve();
-  });
-}
-
-describe('storage', () => {
-  beforeEach(resetDb);
-
-  it('saves and reads back a profile, plan and session (persistence)', async () => {
-    await saveProfile(makeProfile());
-    const { version: _v, createdAt: _c, ...plan } = makePlan();
-    await addPlanVersion(plan);
-    await saveSession(makeSession());
-    await closeDb(); // simulate an app reload
-    expect((await getProfile())?.displayName).toBe('Test User');
-    expect((await getCurrentPlan())?.version).toBe(1);
-    expect(await listSessions()).toHaveLength(1);
-  });
-
-  it('keeps every plan version (history is append-only)', async () => {
-    const { version: _v, createdAt: _c, ...plan } = makePlan();
-    await addPlanVersion(plan);
-    await addPlanVersion({ ...plan, changeSummary: 'Reps changed', changeSource: 'clinician-update' });
-    const versions = await listPlanVersions();
-    expect(versions.map((p) => p.version)).toEqual([1, 2]);
-  });
-
-  it('rejects invalid data on write', async () => {
-    await expect(saveProfile({ ...makeProfile(), displayName: '' })).rejects.toThrow(/Could not save your profile/);
-  });
-
-  it('skips corrupted records on read instead of crashing', async () => {
-    await saveSession(makeSession());
-    const db = await getDb();
-    await db.put('sessions', { id: 'broken', exerciseId: 'not-a-real-exercise' });
-    const before = storageHealth.invalidRecords;
-    const sessions = await listSessions();
-    expect(sessions).toHaveLength(1);
-    expect(storageHealth.invalidRecords).toBe(before + 1);
-  });
-
-  it('deletes a session together with its check-ins', async () => {
-    const s = makeSession();
-    await saveSession(s);
-    await saveCheckIn(makeCheckIn({ sessionId: s.id }));
-    await saveCheckIn(makeCheckIn({ sessionId: null }));
-    await deleteSession(s.id);
-    expect(await listSessions()).toHaveLength(0);
-    expect(await listCheckIns()).toHaveLength(1);
-  });
-
-  it('marks sessions left in progress as interrupted without changing their reps', async () => {
-    const s = makeSession({ status: 'in-progress', endedAt: null });
-    await saveSession(s);
-    const recovered = await recoverInterruptedSessions();
-    expect(recovered).toHaveLength(1);
-    const [saved] = await listSessions();
-    expect(saved?.status).toBe('interrupted');
-    expect(saved?.reps).toHaveLength(s.reps.length);
-  });
-
-  it('exports, clears and re-imports all data', async () => {
-    await saveProfile(makeProfile());
-    await saveSession(makeSession());
-    const bundle = await exportAllData();
-    await clearAllData();
-    expect(await getProfile()).toBeNull();
-    expect(await listSessions()).toHaveLength(0);
-    await importAllData(JSON.parse(JSON.stringify(bundle)));
-    expect((await getProfile())?.displayName).toBe('Test User');
-    expect(await listSessions()).toHaveLength(1);
-  });
-
-  it('refuses to import an invalid backup and leaves data untouched', async () => {
-    await saveProfile(makeProfile());
-    await expect(importAllData({ app: 'Other' })).rejects.toThrow();
-    expect(await getProfile()).not.toBeNull();
-  });
-
-  it('removing demo data wipes a demo profile completely', async () => {
-    await saveProfile(makeProfile({ isDemo: true }));
-    await saveSession(makeSession({ isDemoData: true, mode: 'simulated' }));
-    await removeDemoData();
-    expect(await getProfile()).toBeNull();
-    expect(await listSessions()).toHaveLength(0);
-  });
-});
+// Storage and account tests live in storage.test.ts.
 
 describe('validation', () => {
   it('rejects a target range whose minimum exceeds its maximum', () => {
@@ -164,6 +54,7 @@ describe('coaching rules', () => {
   const rep = (over: Partial<Repetition> = {}): Repetition => ({
     index: 1, setIndex: 1, startedAt: 0, endedAt: 2000, durationMs: 2000, outboundMs: 900, holdMs: 100, returnMs: 1000,
     startValue: 15, peakValue: 90, range: 75, targetMet: true, validity: 'reliable', reliableFraction: 1, speedPeaks: 2, compensation: [], qualityFlags: [],
+    checks: [], method: '2d',
     ...over,
   });
 

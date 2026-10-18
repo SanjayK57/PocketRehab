@@ -10,9 +10,11 @@ import type {
   TargetRange,
   ValidityState,
 } from '@/lib/validation/schemas';
-import { JumpDetector, TimeConstantSmoother, median } from './filters';
+import type { LiveForm } from '@/types/form';
+import { JumpDetector, OneEuroFilter, median } from './filters';
+import { FormTracker } from './formChecks';
 import { buildFingerprint, buildRepetition } from './metrics';
-import { LiveQualityWindow, evaluateFrame, type MetricSample } from './quality';
+import { LiveQualityWindow, evaluateFrame, unavailable, type MetricSample } from './quality';
 import { RepSegmenter, type SegmenterEvent, type SegmenterPhase } from './segmenter';
 
 export interface EngineUpdate {
@@ -24,20 +26,30 @@ export interface EngineUpdate {
   newRep: Repetition | null;
   incomplete: IncompleteAttempt | null;
   duplicate: boolean;
+  /** Live form checks, movement guide and the measurement method used on this frame. */
+  form: LiveForm;
 }
+
+/** Timestamps beyond this (about the year 2286 in epoch ms) are treated as corrupt, so durations can never overflow. */
+const MAX_TIME_MS = 1e13;
+const saneTime = (t: number) => Number.isFinite(t) && Math.abs(t) < MAX_TIME_MS;
 
 export interface EngineOptions {
   def: ExerciseDefinition;
   side: BodySide;
   target: TargetRange | null;
   sessionStart: number;
+  /** Prescribed hold at the peak, in seconds (0 = no hold). Drives hold guidance and the hold-time check. */
+  holdSeconds?: number;
   segmentation?: Partial<SegmentationConfig>;
 }
 
 /**
  * The movement-analysis pipeline for one exercise session:
- * pose frame → quality-checked metric → glitch rejection → smoothing →
- * repetition segmentation → repetition records + quality statistics.
+ * pose frame → quality-checked metric → glitch rejection → One Euro smoothing →
+ * repetition segmentation → form checks → repetition records + quality statistics.
+ * Every output is finite or null, and every stored record fits its schema,
+ * whatever the input (NaN coordinates, corrupt timestamps, missing landmarks).
  *
  * It has no DOM or React dependencies, so it runs identically on live camera
  * frames, simulated frames and synthetic test fixtures.
@@ -52,7 +64,7 @@ export class MovementEngine {
   private readonly target: TargetRange | null;
   private readonly sessionStart: number;
   private readonly segmenter: RepSegmenter;
-  private readonly smoother = new TimeConstantSmoother();
+  private readonly smoother = new OneEuroFilter();
   private readonly jumps = new JumpDetector();
   private readonly live = new LiveQualityWindow();
   private lastT: number | null = null;
@@ -61,13 +73,16 @@ export class MovementEngine {
   private flagCounts: Partial<Record<QualityFlag, number>> = {};
   private scales: number[] = [];
   private lastUpdate: EngineUpdate | null = null;
+  private readonly form: FormTracker;
 
   constructor(opts: EngineOptions) {
     this.def = opts.def;
     this.side = opts.side;
     this.target = opts.target;
-    this.sessionStart = opts.sessionStart;
+    this.sessionStart = saneTime(opts.sessionStart) ? opts.sessionStart : 0;
     this.segmenter = new RepSegmenter({ ...opts.def.segmentation, ...opts.segmentation });
+    const hold = opts.holdSeconds ?? 0;
+    this.form = new FormTracker(opts.def, opts.side, opts.target, Number.isFinite(hold) && hold > 0 ? Math.min(hold, 600) : 0);
   }
 
   get phase(): SegmenterPhase {
@@ -79,10 +94,12 @@ export class MovementEngine {
   }
 
   process(frame: PoseFrame): EngineUpdate {
-    if (this.lastT !== null && frame.timestamp <= this.lastT && this.lastUpdate) {
-      return { ...this.lastUpdate, newRep: null, incomplete: null, duplicate: true };
+    const t = frame.timestamp;
+    if (!saneTime(t) || (this.lastT !== null && t <= this.lastT)) {
+      if (this.lastUpdate) return { ...this.lastUpdate, newRep: null, incomplete: null, duplicate: true };
+      return this.idleUpdate(unavailable(this.lastT ?? 0, ['inference-error']));
     }
-    this.lastT = frame.timestamp;
+    this.lastT = t;
 
     const sample = evaluateFrame(frame, this.def, this.side);
     let smoothed: number | null = null;
@@ -91,7 +108,8 @@ export class MovementEngine {
         sample.state = 'uncertain';
         sample.flags = [...sample.flags, 'implausible-jump'];
       } else {
-        smoothed = this.smoother.next(sample.t, sample.value);
+        const v = this.smoother.next(sample.t, sample.value);
+        smoothed = Number.isFinite(v) ? v : null;
       }
     }
 
@@ -103,24 +121,47 @@ export class MovementEngine {
       this.scales.push(sample.scale);
     }
 
-    const events = this.segmenter.push({ t: sample.t, value: smoothed, state: sample.state, flags: sample.flags, trunk: sample.trunk });
+    const events = this.segmenter.push({ t, value: smoothed, state: sample.state, flags: sample.flags, trunk: sample.trunk, method: sample.method });
+    const liveQuality = this.live.state(t);
+    const finished = events.find((e) => e.type === 'rep');
+    const form = this.form.update(
+      {
+        frame,
+        t,
+        value: smoothed,
+        sampleState: sample.state,
+        method: sample.method,
+        quality: liveQuality,
+        phase: this.segmenter.phase,
+        rep: this.segmenter.current,
+      },
+      finished?.type === 'rep' ? finished.rep : null,
+    );
     const { newRep, incomplete } = this.handleEvents(events);
 
-    const update: EngineUpdate = {
-      sample,
-      smoothed,
-      liveQuality: this.live.state(sample.t),
-      phase: this.segmenter.phase,
-      newRep,
-      incomplete,
-      duplicate: false,
-    };
+    const update: EngineUpdate = { sample, smoothed, liveQuality, phase: this.segmenter.phase, newRep, incomplete, duplicate: false, form };
     this.lastUpdate = update;
     return update;
   }
 
+  /** An update for a frame that could not be processed (corrupt timestamp before any valid frame). */
+  private idleUpdate(sample: MetricSample): EngineUpdate {
+    const form = this.form.update({
+      frame: { timestamp: sample.t, landmarks: null, imageWidth: 0, imageHeight: 0, provider: { name: '', model: '', version: '', kind: 'simulated' }, status: 'error' },
+      t: sample.t,
+      value: null,
+      sampleState: 'unavailable',
+      method: 'none',
+      quality: 'unavailable',
+      phase: this.segmenter.phase,
+      rep: null,
+    });
+    return { sample, smoothed: null, liveQuality: 'unavailable', phase: this.segmenter.phase, newRep: null, incomplete: null, duplicate: true, form };
+  }
+
   /** Advances time without a frame (camera stalled or paused) so tracking gaps are detected. */
   tick(now: number): IncompleteAttempt | null {
+    if (!saneTime(now)) return null;
     return this.handleEvents(this.segmenter.tick(now)).incomplete;
   }
 
@@ -132,6 +173,7 @@ export class MovementEngine {
   resetMotionState(): void {
     this.segmenter.reset();
     this.smoother.reset();
+    this.form.reset();
     this.jumps.reset();
     this.live.reset();
     this.lastT = null;
@@ -168,6 +210,7 @@ export class MovementEngine {
           setIndex: this.setIndex,
           target: this.target,
           sessionStart: this.sessionStart,
+          checks: this.form.repChecks(),
         });
         this.reps.push(newRep);
       } else if (e.type === 'incomplete') {

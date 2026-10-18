@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Camera, CameraOff, ChevronRight, Download, FileUp, History, PencilLine } from 'lucide-react';
 import type { Plan } from '@/lib/validation/schemas';
 import { planFileSchema } from '@/lib/validation/schemas';
@@ -8,34 +8,22 @@ import { addPlanVersion } from '@/lib/storage/repositories';
 import { downloadJson, fileStamp, readJsonFile } from '@/lib/export/download';
 import { EXERCISES } from './library';
 import { describePrescription, describeTarget, planKindLabel, sideLabel } from './describe';
-import { Button, LinkButton, Notice, PageHeader, Section, Select, Tag, cx } from '@/components/ui';
+import { Button, LinkButton, Notice, PageHeader, Section, Select, TabNav, Tag } from '@/components/ui';
 import { ConfirmDialog } from '@/components/Dialog';
 import { useToast } from '@/components/Toast';
 import { formatDate } from '@/lib/time/dates';
 
 export function PlanTabs() {
-  const tabs = [
-    { to: '/plan', label: 'Exercises', end: true },
-    { to: '/plan/schedule', label: 'Schedule' },
-    { to: '/plan/equipment', label: 'Equipment' },
-    { to: '/plan/history', label: 'History' },
-  ];
   return (
-    <nav aria-label="My Plan sections" className="-mt-4 mb-8 overflow-x-auto border-b border-rule">
-      <ul className="flex min-w-max gap-1">
-        {tabs.map((t) => (
-          <li key={t.to}>
-            <NavLink
-              to={t.to}
-              end={t.end}
-              className={({ isActive }) => cx('-mb-px inline-flex min-h-11 items-center border-b-[3px] px-3 font-semibold transition-colors', isActive ? 'border-tape text-ink' : 'border-transparent text-ink-2 hover:text-ink')}
-            >
-              {t.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <TabNav
+      label="My Plan sections"
+      tabs={[
+        { to: '/plan', label: 'Exercises', end: true },
+        { to: '/plan/schedule', label: 'Schedule' },
+        { to: '/plan/equipment', label: 'Equipment' },
+        { to: '/plan/history', label: 'History' },
+      ]}
+    />
   );
 }
 

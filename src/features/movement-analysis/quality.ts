@@ -1,8 +1,10 @@
 import type { PoseFrame, Point2 } from '@/types/pose';
 import type { ExerciseDefinition } from '@/types/exercise';
 import type { BodySide, QualityFlag, ValidityState } from '@/lib/validation/schemas';
+import type { MeasurementMethod } from '@/types/form';
 import { ANALYSIS_CONFIG } from './config';
-import { angleAt, estimateBodyView, toPixel, torsoScale, trunkAngleFromVertical, type BodyView } from './geometry';
+import { estimateBodyView, toPixel, torsoScale, trunkAngleFromVertical, validFrameSize, visibilityOf, type BodyView } from './geometry';
+import { elevationAngle, frameView, jointAngle } from './measure';
 
 /** One frame's measurement for the exercise's joint metric plus its quality metadata. */
 export interface MetricSample {
@@ -11,10 +13,16 @@ export interface MetricSample {
   value: number | null;
   state: ValidityState;
   flags: QualityFlag[];
-  /** Lowest visibility among the metric's three landmarks, when available. */
+  /** Lowest visibility (min of visibility and presence) among the metric's three landmarks, when available. */
   minVisibility: number | null;
-  /** Pixel positions of the metric's landmarks (for the AR overlay), when available. */
+  /**
+   * Pixel positions of the metric's landmarks (for the AR overlay), when available.
+   * For an elevation metric `a` is a point on the trunk axis below `b`, so the
+   * angle a–b–c drawn in the image is the angle that was measured (in 2D).
+   */
   points: { a: Point2; b: Point2; c: Point2 } | null;
+  /** How the value was measured on this frame ('none' when it was not). */
+  method: MeasurementMethod;
   /** Trunk angle from vertical (for compensation checks), when measurable. */
   trunk: number | null;
   view: BodyView;
@@ -36,8 +44,8 @@ export function interiorFromValue(def: ExerciseDefinition, value: number): numbe
   return def.metric.transform === 'supplement' ? 180 - value : value;
 }
 
-function unavailable(t: number, flags: QualityFlag[], extra: Partial<MetricSample> = {}): MetricSample {
-  return { t, value: null, state: 'unavailable', flags, minVisibility: null, points: null, trunk: null, view: 'unknown', scale: null, ...extra };
+export function unavailable(t: number, flags: QualityFlag[], extra: Partial<MetricSample> = {}): MetricSample {
+  return { t, value: null, state: 'unavailable', flags, minVisibility: null, points: null, method: 'none', trunk: null, view: 'unknown', scale: null, ...extra };
 }
 
 /**
@@ -51,6 +59,10 @@ export function evaluateFrame(frame: PoseFrame, def: ExerciseDefinition, side: B
   if (frame.status === 'error') return unavailable(t, ['inference-error']);
   const lms = frame.landmarks;
   if (frame.status === 'no-pose' || !lms) return unavailable(t, ['no-pose']);
+  const w = frame.imageWidth;
+  const h = frame.imageHeight;
+  // Without a real frame size, normalized coordinates cannot become pixels, so nothing can be measured.
+  if (!validFrameSize(w, h)) return unavailable(t, ['inference-error']);
 
   const { a, b, c } = metricLandmarks(def, side);
   const la = lms[a];
@@ -60,22 +72,29 @@ export function evaluateFrame(frame: PoseFrame, def: ExerciseDefinition, side: B
     return unavailable(t, ['landmark-missing']);
   }
 
-  const w = frame.imageWidth;
-  const h = frame.imageHeight;
-  const minVisibility = Math.min(la.visibility, lb.visibility, lc.visibility);
-  const points = { a: toPixel(la, w, h), b: toPixel(lb, w, h), c: toPixel(lc, w, h) };
+  const minVisibility = Math.min(visibilityOf(la), visibilityOf(lb), visibilityOf(lc));
+  const raw = { a: toPixel(la, w, h), b: toPixel(lb, w, h), c: toPixel(lc, w, h) };
   const { view } = estimateBodyView(lms, w, h);
   const trunk = trunkAngleFromVertical(lms, w, h);
   const scale = torsoScale(lms, w, h);
-  const context = { minVisibility, points, trunk, view, scale };
+  const context = { minVisibility, points: raw, trunk, view, scale };
 
   if (minVisibility < ANALYSIS_CONFIG.visibilityUsable) return unavailable(t, ['low-visibility'], context);
 
   const outside = [la, lb, lc].some((p) => p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1);
   if (outside) return unavailable(t, ['out-of-frame'], context);
 
-  const angle = angleAt(points.a, points.b, points.c);
-  if (!angle.ok) return unavailable(t, ['landmark-missing'], context);
+  const fv = frameView(lms, frame.world, w, h);
+  let measured: { degrees: number; method: MeasurementMethod } | null;
+  let points = raw;
+  if (def.metric.kind === 'elevation') {
+    const e = elevationAngle(fv, a, b, c, side);
+    measured = e;
+    if (e) points = { ...raw, a: e.reference };
+  } else {
+    measured = jointAngle(fv, a, b, c);
+  }
+  if (!measured) return unavailable(t, ['landmark-missing'], context);
 
   const flags: QualityFlag[] = [];
   if (minVisibility < ANALYSIS_CONFIG.visibilityReliable) flags.push('low-visibility');
@@ -85,12 +104,16 @@ export function evaluateFrame(frame: PoseFrame, def: ExerciseDefinition, side: B
     flags.push('view-mismatch');
   }
 
+  const value = transformAngle(def, measured.degrees);
+  if (!Number.isFinite(value)) return unavailable(t, ['landmark-missing'], context);
   return {
     t,
-    value: transformAngle(def, angle.degrees),
+    value,
     state: flags.length === 0 ? 'reliable' : 'uncertain',
     flags,
     ...context,
+    points,
+    method: measured.method,
   };
 }
 

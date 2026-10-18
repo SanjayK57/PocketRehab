@@ -10,35 +10,71 @@ Each value is the per-frame error between the measured angle and the exact angle
 
 | Exercise | Noise 0 px | Noise 2 px | Noise 5 px | Noise 10 px |
 |---|---|---|---|---|
-| Arm raise to the side | MAE 0° · p95 0° | MAE 0.7° · p95 1.7° | MAE 1.8° · p95 4.3° | MAE 3.4° · p95 8.1° |
-| Bicep curl (elbow bend) | MAE 0° · p95 0° | MAE 1.2° · p95 2.9° | MAE 2.7° · p95 6.5° | MAE 5.4° · p95 13.6° |
-| Seated knee straightening | MAE 0° · p95 0° | MAE 0.8° · p95 2.1° | MAE 2.3° · p95 5.5° | MAE 4.3° · p95 10.8° |
-| Sit to stand | MAE 0° · p95 0° | MAE 0.9° · p95 2.1° | MAE 2.1° · p95 5.3° | MAE 4.3° · p95 10.5° |
+| Arm raise to the side | MAE 0° · p95 0° | MAE 1.4° · p95 3.4° | MAE 3.6° · p95 8.6° | MAE 7° · p95 17.2° |
+| Bicep curl (elbow bend) | MAE 0° · p95 0° | MAE 1.9° · p95 4.9° | MAE 5.3° · p95 13° | MAE 10° · p95 23.7° |
+| Seated knee straightening | MAE 0° · p95 0° | MAE 1.3° · p95 3° | MAE 3.1° · p95 7.7° | MAE 6.3° · p95 15.4° |
+| Sit to stand | MAE 0° · p95 0° | MAE 1.5° · p95 3.8° | MAE 3.8° · p95 9.5° | MAE 7.3° · p95 18.4° |
 
 With no noise the geometry is exact (error < 0.01°). Error grows with landmark jitter; real pose-model jitter on real footage has not been measured against a reference, so these numbers bound only the software, not the camera system.
 
-## 2. Repetition counting
+## 2. Body turned away from the camera
+
+People rarely stand exactly square to a laptop camera. Each cell turns the synthetic person by the given yaw about the vertical axis and measures 300 random poses per exercise with realistic noise: 2 px image jitter, 1.5 cm world-landmark jitter across the image and 3 cm in depth (the model's depth is its least certain axis). "Image only (previous)" is the angle measured in the camera image on the definition's three landmarks, which is what earlier builds did; for the arm raise that meant the hip on the same side as the reference. "Current" is what the app measures now: for the arm raise the trunk midline in the image, blended into a 3D trunk-fixed frame as the body turns (10°→30° yaw); for the other exercises the image angle, blended toward a hybrid (image x/y plus world depth) as the limb's plane turns away from the camera (15°→35°). Cells show mean absolute error · bias (signed mean).
+
+| Exercise | Method | 0° | 15° | 30° | 45° | 60° |
+|---|---|---|---|---|---|---|
+| Arm raise to the side | Image only (previous) | 11.2° · 11.2° | 12° · 12° | 10.8° · 10.8° | 6.8° · 6.8° | 7.3° · -1.1° |
+| | Current | 1.5° · -0.1° | 2° · 0.7° | 3.6° · -0.1° | 4.1° · 0.2° | 4.4° · 0.5° |
+| | Frames using 3D | 5% | 63% | 99% | 100% | 100% |
+| Bicep curl (elbow bend) | Image only (previous) | 1.9° · 0° | 2.1° · -0.8° | 3.7° · -1.6° | 7.6° · -2.8° | 16.1° · -6.2° |
+| | Current | 2.4° · 0.9° | 2.7° · 0.5° | 4.1° · -0.4° | 6.4° · -0.8° | 7.1° · -0.8° |
+| | Frames using 3D | 28% | 48% | 87% | 98% | 100% |
+| Seated knee straightening | Image only (previous) | 1.3° · -0.1° | 2.9° · -2.7° | 7.3° · -7.3° | 14.7° · -14.7° | 27° · -27° |
+| | Current | 1.8° · -0.8° | 3.5° · -3.3° | 4.1° · -3.9° | 3.7° · -2.6° | 4.1° · -0.2° |
+| | Frames using 3D | 25% | 54% | 99% | 99% | 99% |
+| Sit to stand | Image only (previous) | 1.7° · -0.2° | 1.8° · 0.6° | 3.4° · 3° | 7.2° · 7.1° | 14.7° · 14.7° |
+| | Current | 2.1° · -1.1° | 2.6° · -1.1° | 3.8° · -0.8° | 5.7° · -2.2° | 6° · -1° |
+| | Frames using 3D | 27% | 47% | 77% | 92% | 94% |
+
+Facing the camera, the previous arm-raise reference (the hip on the same side, which sits about 10 cm inboard of the shoulder on this skeleton) reads about 11° high on every repetition; the trunk midline removes that bias. When the body turns, the 3D estimate keeps the error roughly level while the image angle grows. For the side-view exercises the image angle is already exact when the limb faces the camera, so the blend only engages as the limb turns. Beyond about 45° the side-view exercises also fail the camera-view check, so those frames are marked uncertain and never count toward progress. Real MediaPipe world landmarks may be noisier than modelled here; that has not been measured.
+
+## 3. Smoothing filter
+
+The joint angle is smoothed with a One Euro filter (cutoff rises with speed). 8 sessions × 4 arm raises peaking at 84–96°, 2 px noise. "Peak error" is the smoothed peak minus the true peak (positive = overshoot from noise); "rest jitter" is the standard deviation of the smoothed value at rest; "lag" is the mean error mid-rise (true 50–70°).
+
+| Filter | fps | Peak error (mean / MAE) | Rest jitter (SD) | Lag mid-rise |
+|---|---|---|---|---|
+| Exponential, τ = 70 ms (previous) | 30 | 0.9° / 0.9° | 0.9° | 4.1° |
+| One Euro, 1.0 Hz, β 0.03 | 30 | 0.9° / 0.9° | 0.8° | 2.4° |
+| One Euro, 0.5 Hz, β 0.03 (current) | 30 | 0.7° / 0.8° | 0.7° | 2.6° |
+| Exponential, τ = 70 ms (previous) | 15 | 1.2° / 1.3° | 1.1° | 3.2° |
+| One Euro, 1.0 Hz, β 0.03 | 15 | 0.9° / 1° | 0.9° | 2.9° |
+| One Euro, 0.5 Hz, β 0.03 (current) | 15 | 0.7° / 0.8° | 0.8° | 3.2° |
+
+Parameters were chosen on this table (a sweep of 0.5–1.5 Hz and β 0.01–0.08): the current setting roughly halves the lag of the previous filter with slightly less jitter at rest and no worse peak error. The AR overlay uses a separate One Euro landmark smoother for drawing only; measurements never use smoothed landmarks.
+
+## 4. Repetition counting
 
 20 simulated sessions per exercise, 8 repetitions each, with random peak heights (all above the counting threshold), random speeds (0.7–2.5 s out, 0.8–2.5 s back), random holds (0–3.5 s), 2 px landmark noise, 30 fps.
 
 | Exercise | True reps | Counted | Missed | Extra (false) | Peak error (median) |
 |---|---|---|---|---|---|
-| Arm raise to the side | 160 | 160 | 0 | 0 | 0.7° |
-| Bicep curl (elbow bend) | 160 | 160 | 0 | 0 | 0.8° |
-| Seated knee straightening | 160 | 160 | 0 | 0 | 0.8° |
-| Sit to stand | 160 | 160 | 0 | 0 | 0.8° |
+| Arm raise to the side | 160 | 160 | 0 | 0 | 1° |
+| Bicep curl (elbow bend) | 160 | 160 | 0 | 0 | 1.2° |
+| Seated knee straightening | 160 | 160 | 0 | 0 | 0.9° |
+| Sit to stand | 160 | 160 | 0 | 0 | 1.1° |
 
 Overall: 640 of 640 scripted repetitions counted (100%), 0 extra.
 
-## 3. Movements that must not be counted
+## 5. Movements that must not be counted
 
 | Scenario | Movements | Counted (should be 0) | Recorded as not counted |
 |---|---|---|---|
-| Partial movements that never reach the counting threshold (all exercises) | 200 | 0 | 171 |
+| Partial movements that never reach the counting threshold (all exercises) | 200 | 0 | 170 |
 | Single-frame tracking glitches of +75° at rest (arm raise) | 120 | 0 | — |
 | 10 s of jitter around the start position (±5°, 3 px noise) | 20 sessions | 0 | — |
 
-## 4. Occlusion, dropped frames and camera interruptions
+## 6. Occlusion, dropped frames and camera interruptions
 
 Arm raise, 8 repetitions per session, 10 sessions per row.
 
@@ -50,19 +86,49 @@ Arm raise, 8 repetitions per session, 10 sessions per row.
 | 5% of frames with no person detected | 80 / 80 | 80 | 0 | 10 / 10 |
 | 20% of frames with no person detected | 80 / 80 | 80 | 0 | 10 / 10 |
 | 1-second camera freeze once per session | 72 / 80 | 72 | 0 | 10 / 10 |
-| Body turned side-on, so the view check fails | 80 / 80 | 0 | 80 | 0 / 10 |
+| Body turned 80° (side-on), so the view check fails | 80 / 80 | 0 | 80 | 0 / 10 |
 
 Missing or hidden landmarks abort the affected repetition instead of guessing it; partial visibility keeps counting but excludes the measurements. A mismatched camera view marks frames uncertain, so those repetitions are excluded from measurements.
 
-## 5. Repeatability under simulated noise
+## 7. Form-check detection
+
+For every check of every exercise, 6 simulated sessions alternate clean repetitions with repetitions showing that check's fault (the same faults the simulated demo uses, e.g. a 45° elbow bend, a 16° sideways lean, a 0.38 s lowering). Noise: 2 px image, 1 cm world. A repetition is "detected" when its stored result for that check is fail; a "false alarm" is a fail on a clean repetition. "Tilted camera" repeats the clean repetitions with the whole image rolled 8°, which posture checks must ignore because they compare with the start of each repetition. The last column turns the person 25° and raises the noise to 3 px and 1.5 cm (3 cm depth); repetitions whose tracking is uncertain (for example a forward lean that makes a turned body look front-on to the view check) get no form judgement at all, by design. Thresholds are demonstration parameters, not clinical ones.
+
+| Exercise | Check | Detected | False alarms | Tilted camera: false alarms | Turned 25°, heavier noise: detected · false alarms |
+|---|---|---|---|---|---|
+| Arm raise | Elbow straight | 12 / 12 | 0 / 12 | 0 / 6 | 5 / 6 · 0 / 6 |
+| Arm raise | Out to the side | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Arm raise | Shoulder relaxed | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Arm raise | Body upright | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Arm raise | Steady pace | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Arm raise | Slow lowering | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Arm raise | Within target | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Bicep curl | Upper arm still | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Bicep curl | Start straight | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Bicep curl | No swinging | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Bicep curl | Steady pace | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Bicep curl | Slow lowering | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Bicep curl | Within target | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Knee extension | Sitting tall | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Knee extension | Thigh resting | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Knee extension | Hold time | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Knee extension | Steady pace | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Knee extension | Slow lowering | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Sit to stand | Standing tall | 12 / 12 | 0 / 12 | 0 / 6 | 1 / 6 (5 not judged: tracking uncertain) · 0 / 6 |
+| Sit to stand | Slow sit | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+| Sit to stand | Steady pace | 12 / 12 | 0 / 12 | 0 / 6 | 6 / 6 · 0 / 6 |
+
+Overall (first three columns): 252 of 252 faulty repetitions detected (100%), 0 false alarms on 378 clean repetitions (0%). Detection here only shows that each rule does what it says on synthetic people with known faults; whether the rules and thresholds match what a clinician would correct has not been evaluated.
+
+## 8. Repeatability under simulated noise
 
 The same scripted movement (8 repetitions peaking at exactly 90°) was "recorded" 30 times with different random 3 px landmark noise. This is the variation the software alone adds; real camera sessions vary much more (placement, distance, clothing, lighting, the person).
 
-Session median peak: mean 91°, standard deviation 0.2°, range 90.5–91.3° (n = 30).
+Session median peak: mean 91.6°, standard deviation 0.3°, range 90.9–92.6° (n = 30).
 
 Because real-camera repeatability has not been measured, PocketRehab does not set a minimal detectable change (`MEASUREMENT_ERROR_MODEL = null`) and never calls a change "improvement".
 
-## 6. Real footage (MediaPipe on a real person)
+## 9. Real footage (MediaPipe on a real person)
 
 Recorded by `tests/e2e/real-person.spec.ts` on 2026-10-17: the browser's fake camera played *Jumping jacks and burpees (Taco fleur, CC BY-SA 4.0), first 20 s looped, 480x360 @ 15 fps* while the real MediaPipe Pose Landmarker ran in the page.
 
@@ -80,7 +146,7 @@ The headless test browser has no hardware GPU, so its frame rate is far below a 
 
 The clip shows fast jumping jacks and burpees, not a rehab exercise, so this run checks detection, the setup checks and the quality states on real footage. It is one clip of one person and is not an accuracy measurement.
 
-## 7. Not yet evaluated
+## 10. Not yet evaluated
 
 - Joint-angle accuracy of the camera system against a goniometer or motion-capture reference.
 - Performance across camera angles, distances, lighting, clothing, body types and skin tones on real people.

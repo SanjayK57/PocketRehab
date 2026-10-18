@@ -1,9 +1,33 @@
 import { expect, type Page } from '@playwright/test';
 
-/** Completes onboarding with a clinician plan of one short exercise (1 set × 3 reps, no rest). */
+/** Where the app under test is served (specs that open their own browser need it too). */
+export const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:4173';
+export const PASSWORD = 'correct horse battery';
+
+/** Creates a local account from the first-run screen and lands in onboarding. */
+export async function createAccount(page: Page, opts: { name?: string; password?: string } = {}) {
+  const heading = page.getByRole('heading', { name: /Set up PocketRehab|Add an account/ });
+  if (!(await heading.isVisible())) await page.goto('/');
+  await expect(heading).toBeVisible();
+  await page.getByLabel('Account name').fill(opts.name ?? 'Jordan');
+  await page.getByLabel('Password', { exact: true }).fill(opts.password ?? PASSWORD);
+  await page.getByLabel('Type it again').fill(opts.password ?? PASSWORD);
+  await page.getByLabel(/I understand that if I forget this password/).check();
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByRole('heading', { name: 'Rehab done right.' })).toBeVisible({ timeout: 20_000 });
+}
+
+/** Unlocks the account the sign-in screen offers (after a reload, a lock or auto-lock). */
+export async function unlock(page: Page, password = PASSWORD) {
+  await expect(page.getByRole('heading', { name: /^Welcome back, / })).toBeVisible();
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByRole('heading', { name: /^Welcome back, / })).toHaveCount(0, { timeout: 20_000 });
+}
+
+/** Creates an account, then completes onboarding with a clinician plan of one short exercise (1 set × 3 reps, no rest). */
 export async function onboardWithPlan(page: Page, opts: { name?: string; reps?: number } = {}) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Rehab done right.' })).toBeVisible();
+  await createAccount(page, { name: opts.name });
   await page.getByRole('button', { name: 'Get started' }).click();
   await expect(page.getByText('Please confirm you’ve read this')).toBeVisible();
   await page.getByLabel(/I understand that PocketRehab supports/).check();
@@ -45,7 +69,7 @@ export async function onboardWithPlan(page: Page, opts: { name?: string; reps?: 
 
 export async function loadDemoProfile(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Explore the demo profile' }).click();
+  await page.getByRole('button', { name: /^Explore the demo/ }).click();
   await expect(page.getByText('Demo profile.', { exact: false }).first()).toBeVisible();
   // The sample history is written after the profile; wait until the home plot shows it.
   await expect(page.getByText('Reliable measurement').first()).toBeVisible();

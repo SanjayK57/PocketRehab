@@ -1,5 +1,5 @@
 import { chromium, expect, test } from '@playwright/test';
-import { onboardWithPlan } from './helpers';
+import { BASE_URL, onboardWithPlan } from './helpers';
 
 /**
  * Camera behaviour in a real browser.
@@ -30,7 +30,7 @@ test('camera permission denied shows an honest fallback', async ({ page, context
 test('fake camera: on-device pose model loads and setup refuses an empty scene', async () => {
   test.setTimeout(180_000);
   const browser = await chromium.launch({ args: ['--mute-audio', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
-  const context = await browser.newContext({ permissions: ['camera'], baseURL: 'http://localhost:4173', viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+  const context = await browser.newContext({ permissions: ['camera'], baseURL: BASE_URL, viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
   // Record every camera stream the page opens so we can check they are all stopped afterwards.
   await context.addInitScript(() => {
     const w = window as unknown as { __streams: MediaStream[] };

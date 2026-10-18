@@ -12,6 +12,8 @@ export interface Landmark {
   z: number;
   /** Model's per-landmark visibility estimate (0..1). A tracking-quality signal, not a calibrated probability. */
   visibility: number;
+  /** Model's estimate (0..1) that the landmark is inside the frame, when the model provides one. */
+  presence?: number;
 }
 
 export type InferenceStatus = 'ok' | 'no-pose' | 'error';
@@ -61,6 +63,8 @@ export interface Point2 {
 /** MediaPipe BlazePose landmark indices used by PocketRehab. */
 export const LM = {
   nose: 0,
+  leftEar: 7,
+  rightEar: 8,
   leftShoulder: 11,
   rightShoulder: 12,
   leftElbow: 13,

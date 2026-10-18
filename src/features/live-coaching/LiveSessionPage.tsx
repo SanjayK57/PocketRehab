@@ -66,7 +66,7 @@ export function LiveSessionPage() {
         events.current.push({ t: Date.now() - startedAt.current, kind: msg.kind === 'count' ? 'rep' : msg.kind === 'progress' ? 'note' : msg.kind === 'safety' ? 'camera-lost' : msg.kind === 'setup' || msg.kind === 'quality' ? 'setup' : 'feedback', message: msg.text.slice(0, 300) });
       }
       if (prefs.voiceEnabled && throttle.current.shouldSpeak(msg, performance.now())) {
-        speak(msg.text, { rate: prefs.speechRate, voiceURI: prefs.voiceURI, interrupt: msg.priority === 'high' });
+        speak(msg.say ?? msg.text, { rate: prefs.speechRate, voiceURI: prefs.voiceURI, interrupt: msg.priority === 'high' });
       }
     },
     [prefs],
@@ -75,7 +75,7 @@ export function LiveSessionPage() {
   const ensureEngine = useCallback(() => {
     if (!engineRef.current && def && prescribed) {
       startedAt.current ??= Date.now();
-      engineRef.current = new MovementEngine({ def, side, target: prescribed.target, sessionStart: performance.now() });
+      engineRef.current = new MovementEngine({ def, side, target: prescribed.target, holdSeconds: prescribed.holdSeconds, sessionStart: performance.now() });
     }
     return engineRef.current as MovementEngine;
   }, [def, prescribed, side]);

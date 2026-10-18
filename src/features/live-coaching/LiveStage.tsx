@@ -13,9 +13,11 @@ import { Button, Notice, cx } from '@/components/ui';
 import { TapeSwatch } from '@/components/tape';
 import { ConfirmDialog } from '@/components/Dialog';
 import { usePoseStage, type StageStats } from './usePoseStage';
-import { drawOverlay, readTheme } from './arRenderer';
-import { fitCanvas } from './CameraTest';
-import { TRAFFIC_LIGHT_TEXT, trafficLight, type CoachEvent, type CoachMessage, type TrafficLight } from './coach';
+import { OverlayState, drawOverlay, fitCanvas, type OverlayStage } from './arRenderer';
+import { FormCueGate, TRAFFIC_LIGHT_TEXT, trafficLight, type CoachEvent, type CoachMessage, type TrafficLight } from './coach';
+import type { GuidePhase, LiveForm } from '@/types/form';
+import { useReducedMotion } from '@/app/usePreferencesEffect';
+import { SimulatedStage } from '@/features/simulation/SimulatedStage';
 import type { MachineEvent, MachineState } from './sessionMachine';
 import { startVoiceCommands } from './voice';
 
@@ -34,6 +36,7 @@ interface Hud {
   checks: SetupChecks | null;
   ready: boolean;
   lastRep: Repetition | null;
+  form: LiveForm | null;
 }
 
 const READY_HOLD_MS = 1500;
@@ -91,7 +94,17 @@ export function LiveStage({
   const announcedUncertain = useRef(false);
   const lastRepRef = useRef<Repetition | null>(null);
   const stageStatsRef = useRef<StageStats>({ fps: null, inferenceMs: null, delegate: '', model: '', width: 0, height: 0, reducedRate: false, brightness: null });
-  const [hud, setHud] = useState<Hud>({ value: null, quality: 'unavailable', light: 'idle', checks: null, ready: false, lastRep: null });
+  const [hud, setHud] = useState<Hud>({ value: null, quality: 'unavailable', light: 'idle', checks: null, ready: false, lastRep: null, form: null });
+  const overlay = useRef(new OverlayState());
+  const frameRef = useRef<PoseFrame | null>(null);
+  const cueGate = useRef(new FormCueGate());
+  const formRef = useRef<LiveForm | null>(null);
+  const lastGuide = useRef<GuidePhase | null>(null);
+  const reduced = useReducedMotion(prefs.reducedMotion);
+  const reducedRef = useRef(reduced);
+  useLayoutEffect(() => {
+    reducedRef.current = reduced;
+  });
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -101,20 +114,24 @@ export function LiveStage({
   const onFrame = useCallback(
     (frame: PoseFrame) => {
       const phase = machineRef.current.phase;
+      frameRef.current = frame;
       let sample: MetricSample;
       let value: number | null;
       if (phase === 'active' && engineRef.current) {
         const upd = engineRef.current.process(frame);
         sample = upd.sample;
         value = upd.smoothed ?? sample.value;
+        formRef.current = upd.form;
         if (upd.newRep) {
           lastRepRef.current = upd.newRep;
+          cueGate.current.notePriority(performance.now());
           onRep(upd.newRep);
         }
         if (upd.incomplete) onIncomplete(upd.incomplete);
       } else {
         sample = evaluateFrame(frame, def, side);
         value = sample.value;
+        formRef.current = null;
       }
       const t = frame.timestamp;
       live.current.push(t, sample.state);
@@ -138,6 +155,20 @@ export function LiveStage({
             announcedUncertain.current = false;
             coach({ type: 'tracking-restored' });
           }
+        }
+      }
+
+      // Form cues: the first check that is failing, if the gate allows a cue now (never on uncertain tracking).
+      const form = formRef.current;
+      if (phase === 'active' && form) {
+        const now = performance.now();
+        const failing = form.checks.find((c) => c.state === 'warn');
+        if (failing && cueGate.current.allow(failing.id, now, quality === 'reliable')) coach({ type: 'form-cue', check: failing.id, reliable: true });
+        // Spoken "Hold" / "Lower slowly" only for exercises with a prescribed hold, so plain reps stay quiet.
+        const gp = form.guide.phase;
+        if (gp !== lastGuide.current) {
+          if (prescribed.holdSeconds > 0 && lastGuide.current !== null && (gp === 'hold' || gp === 'return')) coach({ type: 'guide', phase: gp, exercise: def });
+          lastGuide.current = gp;
         }
       }
 
@@ -174,36 +205,36 @@ export function LiveStage({
       const ctx = canvas?.getContext('2d');
       if (canvas && ctx) {
         fitCanvas(canvas);
-        const ghostPhase = phase === 'camera-setup' || phase === 'countdown' ? ((t / 4200) % 1) : null;
+        const stage: OverlayStage = phase === 'camera-setup' ? 'setup' : phase === 'countdown' ? 'countdown' : phase === 'active' ? 'active' : 'idle';
         drawOverlay(
           ctx,
           {
-            landmarks: frame.landmarks,
-            frameWidth: frame.imageWidth,
-            frameHeight: frame.imageHeight,
+            pose: { landmarks: frame.landmarks, world: frame.world ?? null, points: sample.points, frameWidth: frame.imageWidth, frameHeight: frame.imageHeight },
             def,
             side,
             value,
-            points: sample.points,
             target,
             quality,
-            light,
-            reps: machineRef.current.repsInSet,
-            repsTarget: machineRef.current.repsPerSet,
-            ghostPhase,
+            form: phase === 'active' ? form : null,
+            stage,
+            setupFitted: readySince.current !== null,
             mirrored,
-            showGuides: sample.points !== null,
+            showBody: mode !== 'simulated',
+            showInstruments: sample.points !== null,
+            reducedMotion: reducedRef.current,
+            now: t,
+            avoid: [],
           },
-          readTheme(canvas),
+          overlay.current,
         );
       }
 
       if (t - lastHud.current > 120) {
         lastHud.current = t;
-        setHud({ value, quality, light, checks, ready, lastRep: lastRepRef.current });
+        setHud({ value, quality, light, checks, ready, lastRep: lastRepRef.current, form: phase === 'active' ? form : null });
       }
     },
-    [coach, def, engineRef, mirrored, onIncomplete, onRep, side, target, onAutoSide],
+    [coach, def, engineRef, mirrored, onIncomplete, onRep, side, target, onAutoSide, prescribed.holdSeconds, mode],
   );
 
   const { videoRef, status: stageStatus, error: stageError, stats: stageStats, start: startStage, stop: stopStage } = usePoseStage({
@@ -245,6 +276,8 @@ export function LiveStage({
       engine.resetMotionState();
       engine.setIndex = machine.set;
       live.current.reset();
+      overlay.current.reset();
+      lastGuide.current = null;
       uncertainSince.current = null;
       announcedUncertain.current = false;
     }
@@ -356,6 +389,7 @@ export function LiveStage({
       <div className="min-w-0">
         <div className="relative aspect-[4/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-stage text-stage-ink sm:aspect-video">
           {mode === 'camera' ? <video ref={videoRef} className="absolute inset-0 size-full object-cover" style={{ transform: mirrored ? 'scaleX(-1)' : undefined }} muted playsInline aria-label="Live camera preview" /> : null}
+          {mode === 'simulated' ? <SimulatedStage frameRef={frameRef} def={def} side={side} reducedMotion={reduced} className="absolute inset-0 size-full" /> : null}
           <canvas ref={canvasRef} className="absolute inset-0 size-full" aria-hidden />
           {mode === 'simulated' ? (
             <p className="absolute left-3 top-3 rounded-full bg-signal px-3 py-1 text-sm font-bold text-white">Simulated demo · not your camera</p>
@@ -380,6 +414,8 @@ export function LiveStage({
               )}
             </div>
           ) : null}
+
+          {machine.phase === 'active' && hud.form ? <GuideBanner form={hud.form} /> : null}
 
           {machine.phase === 'countdown' ? (
             <div className="absolute inset-0 flex items-center justify-center bg-stage/55">
@@ -515,6 +551,7 @@ export function LiveStage({
               </p>
             </div>
             <TrafficLightPanel light={hud.light} quality={hud.quality} />
+            <FormChecksPanel form={hud.form} lastRep={hud.lastRep} />
             <div className="flex flex-wrap gap-2">
               {machine.phase === 'paused' ? (
                 <Button size="lg" onClick={resume} icon={<Play aria-hidden className="size-5" />}>
@@ -644,6 +681,58 @@ function SetupPanel({ def, checks, ready, running, stats, onStart, onStartAnyway
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Large on-stage instruction for the current phase, with a hold countdown when the plan has a hold. */
+function GuideBanner({ form }: { form: LiveForm }) {
+  const { guide } = form;
+  const holdLeft = guide.phase === 'hold' && guide.hold ? Math.max(0, Math.ceil((guide.hold.requiredMs - guide.hold.heldMs) / 1000)) : null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 bg-gradient-to-t from-stage/80 to-transparent px-5 pb-4 pt-10">
+      <p className="text-3xl font-bold leading-none text-white sm:text-4xl" aria-hidden>
+        {guide.instruction}
+        {holdLeft !== null ? <span className="num ml-3 text-tape">{holdLeft}</span> : null}
+      </p>
+      {guide.pastTarget ? <p className="rounded-full bg-signal px-3 py-1 text-sm font-bold text-white">Past your target</p> : guide.inTarget ? <p className="rounded-full bg-tape px-3 py-1 text-sm font-bold text-white">In target</p> : null}
+    </div>
+  );
+}
+
+const CHECK_SWATCH = { ok: 'reliable', warn: 'signal', unknown: 'uncertain' } as const;
+
+/** Live form checks while moving, and how the last repetition went. Unknown means "not judged", never "wrong". */
+function FormChecksPanel({ form, lastRep }: { form: LiveForm | null; lastRep: Repetition | null }) {
+  const lastChecks = lastRep?.checks ?? [];
+  if (!form && lastChecks.length === 0) return null;
+  return (
+    <div className="border-t border-ink pt-3">
+      <h3 className="mb-2 font-bold">Form checks</h3>
+      {form ? (
+        <ul className="space-y-1" aria-label="Live form checks">
+          {form.checks.map((c) => (
+            <li key={c.id} className={cx('flex items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors', c.state === 'warn' && 'bg-surface-2')}>
+              <TapeSwatch kind={CHECK_SWATCH[c.state]} />
+              <span className="min-w-0 flex-1 font-semibold">{c.label}</span>
+              <span className={cx('text-sm', c.state === 'warn' ? 'font-semibold text-signal-ink' : 'text-ink-3')}>{c.state === 'ok' ? 'Good' : c.state === 'warn' ? 'Adjust' : 'Not judged'}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {lastChecks.length > 0 ? (
+        <p className="mt-2 text-sm text-ink-2">
+          Last repetition:{' '}
+          {lastChecks.every((c) => c.result !== 'fail')
+            ? lastChecks.some((c) => c.result === 'pass')
+              ? 'all checks passed.'
+              : 'tracking was uncertain, so form was not judged.'
+            : `to work on: ${lastChecks
+                .filter((c) => c.result === 'fail')
+                .map((c) => c.label.toLowerCase())
+                .join(', ')}.`}
+        </p>
+      ) : null}
     </div>
   );
 }

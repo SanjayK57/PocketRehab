@@ -1,7 +1,7 @@
 import { chromium, expect, test } from '@playwright/test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { onboardWithPlan } from './helpers';
+import { BASE_URL, onboardWithPlan } from './helpers';
 
 /**
  * Real computer vision on a real person, with no physical camera:
@@ -22,7 +22,7 @@ test('real person via fake camera: detection, setup checks, live measurement', a
   const browser = await chromium.launch({
     args: ['--mute-audio', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-video-capture=${video}`],
   });
-  const context = await browser.newContext({ permissions: ['camera'], baseURL: 'http://localhost:4173', viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+  const context = await browser.newContext({ permissions: ['camera'], baseURL: BASE_URL, viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));

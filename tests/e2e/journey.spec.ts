@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { loadDemoProfile, onboardWithPlan } from './helpers';
+import { loadDemoProfile, onboardWithPlan, unlock } from './helpers';
 
 test.describe('core user journey', () => {
   test('onboarding → simulated session → persistence → progress → report → schedule → delete', async ({ page }) => {
@@ -32,8 +32,9 @@ test.describe('core user journey', () => {
     await expect(page.getByText('Simulated demo session.', { exact: false })).toBeVisible();
     await expect(page.getByText('3 of 3')).toBeVisible();
 
-    // Persistence across reload.
+    // Persistence across reload (the key lives only in memory, so a reload asks for the password).
     await page.reload();
+    await unlock(page);
     await page.goto('/#/progress/history');
     await expect(page.getByRole('main').getByText('Simulated demo', { exact: true }).first()).toBeVisible();
 
@@ -122,6 +123,7 @@ test.describe('core user journey', () => {
     await expect(page.getByText('Simulated demo · not your camera')).toBeVisible();
     await page.waitForTimeout(9000);
     await page.reload();
+    await unlock(page);
     await expect(page.getByText('Your last session was interrupted', { exact: false })).toBeVisible();
     await page.getByRole('link', { name: 'Review it' }).click();
     await expect(page.getByText('interrupted').first()).toBeVisible();
@@ -141,8 +143,9 @@ test.describe('core user journey', () => {
     await page.goto('/#/settings');
     await expect(page.getByRole('heading', { name: 'What this device supports' })).toBeVisible();
     await expect(page.getByText('Local data storage (IndexedDB)')).toBeVisible();
+    // The demo is its own account: removing its data removes it and returns to the first-run screen.
     await page.getByRole('button', { name: 'Remove demo data' }).click();
-    await expect(page.getByRole('heading', { name: 'Rehab done right.' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Set up PocketRehab' })).toBeVisible();
   });
 
   test('plan update creates a new version with history', async ({ page }) => {

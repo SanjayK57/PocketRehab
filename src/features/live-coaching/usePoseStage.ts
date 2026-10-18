@@ -20,12 +20,22 @@ export interface StageStats {
   brightness: number | null;
 }
 
+/** The camera picture must advance within this long while the page is visible, or the camera is treated as lost. */
+const STALL_MS = 6000;
+
 /**
  * Runs the capture → pose estimation loop outside React state. Per-frame data
  * goes to `onFrame` (kept in a ref) so the screen does not re-render 30 times
- * a second. Frames are processed at a sustainable rate: at most one inference
- * per animation frame, never queued, and the target rate drops to 15 fps if
- * inference is slow on this device.
+ * a second, and `onRender` is called on every animation frame so the overlay
+ * can draw at the display's rate. Frames are processed at a sustainable rate:
+ * at most one inference per animation frame, never queued, and the target rate
+ * drops to 15 fps if inference is slow on this device.
+ *
+ * Robustness: an exception in one frame never stops the loop (it is reported
+ * once); starting is cancelled cleanly if the screen closes while the camera
+ * permission prompt or the model download is still pending (no camera left
+ * running, no state set after unmount); a camera that unplugs, ends or stops
+ * delivering pictures is reported as lost.
  */
 export function usePoseStage(opts: {
   mode: StageMode;
@@ -33,6 +43,7 @@ export function usePoseStage(opts: {
   side: BodySide;
   modelVariant: PoseModelVariant;
   onFrame: (frame: PoseFrame) => void;
+  onRender?: (now: number) => void;
   onCameraLost: () => void;
   holdSeconds?: number;
 }) {
@@ -42,9 +53,11 @@ export function usePoseStage(opts: {
   const [stats, setStats] = useState<StageStats>({ fps: null, inferenceMs: null, delegate: '', model: '', width: 0, height: 0, reducedRate: false, brightness: null });
 
   const onFrameRef = useRef(opts.onFrame);
+  const onRenderRef = useRef(opts.onRender);
   const onLostRef = useRef(opts.onCameraLost);
   useLayoutEffect(() => {
     onFrameRef.current = opts.onFrame;
+    onRenderRef.current = opts.onRender;
     onLostRef.current = opts.onCameraLost;
   });
 
@@ -52,15 +65,11 @@ export function usePoseStage(opts: {
   const providerRef = useRef<PoseProvider | null>(null);
   const loopRef = useRef<number | null>(null);
   const activeRef = useRef(false);
-  const timings = useRef<{ frameTimes: number[]; inference: number[]; reduced: boolean; lastProcessed: number; lastStats: number; lastBrightness: number; brightness: number | null }>({
-    frameTimes: [],
-    inference: [],
-    reduced: false,
-    lastProcessed: 0,
-    lastStats: 0,
-    lastBrightness: 0,
-    brightness: null,
-  });
+  /** Incremented by every start/stop; an async start that finds it changed abandons itself. */
+  const generation = useRef(0);
+  const mounted = useRef(true);
+  const reportedError = useRef(false);
+  const timings = useRef({ frameTimes: [] as number[], inference: [] as number[], reduced: false, lastProcessed: 0, lastStats: 0, lastBrightness: 0, brightness: null as number | null, videoTime: -1, videoTimeAt: 0 });
   const scratch = useRef<HTMLCanvasElement | null>(null);
 
   const stopLoop = () => {
@@ -72,6 +81,7 @@ export function usePoseStage(opts: {
   };
 
   const stop = useCallback(() => {
+    generation.current++;
     stopLoop();
     cameraRef.current?.stop();
     cameraRef.current = null;
@@ -79,69 +89,104 @@ export function usePoseStage(opts: {
     providerRef.current = null;
     const v = videoRef.current;
     if (v) v.srcObject = null;
-    setStatus((s) => (s === 'error' ? s : 'stopped'));
+    if (mounted.current) setStatus((s) => (s === 'error' ? s : 'stopped'));
+  }, []);
+
+  const cameraLost = useCallback(() => {
+    stopLoop();
+    if (!mounted.current) return;
+    setStatus('error');
+    setError(new CameraError('unknown', 'The camera stopped or was disconnected.'));
+    onLostRef.current();
   }, []);
 
   /** Processes at most one frame; called once per animation frame while the loop runs. */
-  const step = useCallback(() => {
-    const provider = providerRef.current;
-    if (!provider) return;
-    const now = performance.now();
-    const t = timings.current;
-    const minGap = 1000 / (t.reduced ? 15 : 30);
-    if (now - t.lastProcessed < minGap - 2) return;
-    const video = opts.mode === 'camera' ? videoRef.current : null;
-    if (opts.mode === 'camera' && (!video || video.readyState < 2 || video.paused)) return;
-    t.lastProcessed = now;
-    const frame = provider.estimate(video, now);
-    t.frameTimes.push(now);
-    if (frame.inferenceMs !== undefined) t.inference.push(frame.inferenceMs);
-    if (t.frameTimes.length > 60) t.frameTimes.shift();
-    if (t.inference.length > 60) t.inference.shift();
+  const step = useCallback(
+    (now: number) => {
+      const provider = providerRef.current;
+      if (!provider) return;
+      const t = timings.current;
+      const video = opts.mode === 'camera' ? videoRef.current : null;
+      if (opts.mode === 'camera') {
+        if (!video) return;
+        // Stall watchdog: the picture has to keep moving while the page is visible.
+        if (video.currentTime !== t.videoTime) {
+          t.videoTime = video.currentTime;
+          t.videoTimeAt = now;
+        } else if (t.videoTimeAt > 0 && now - t.videoTimeAt > STALL_MS && document.visibilityState === 'visible') {
+          cameraLost();
+          return;
+        }
+        if (video.readyState < 2 || video.paused) return;
+      }
+      // The simulator is cheap, so it runs at the display rate for the smoothest demonstration.
+      const minGap = opts.mode === 'simulated' ? 1000 / 60 : 1000 / (t.reduced ? 15 : 30);
+      if (now - t.lastProcessed < minGap - 2) return;
+      t.lastProcessed = now;
+      const frame = provider.estimate(video, now);
+      t.frameTimes.push(now);
+      if (frame.inferenceMs !== undefined) t.inference.push(frame.inferenceMs);
+      if (t.frameTimes.length > 60) t.frameTimes.shift();
+      if (t.inference.length > 60) t.inference.shift();
 
-    if (opts.mode === 'camera' && video && now - t.lastBrightness > 1000) {
-      t.lastBrightness = now;
-      scratch.current ??= document.createElement('canvas');
-      t.brightness = frameBrightness(video, scratch.current);
-    }
-    if (now - t.lastStats > 1000) {
-      t.lastStats = now;
-      const inf = median(t.inference);
-      if (inf !== null && inf > 45 && !t.reduced) t.reduced = true;
-      const span = (t.frameTimes[t.frameTimes.length - 1] ?? 0) - (t.frameTimes[0] ?? 0);
-      const fps = t.frameTimes.length > 5 && span > 0 ? ((t.frameTimes.length - 1) / span) * 1000 : null;
-      setStats({
-        fps: fps === null ? null : Math.round(fps),
-        inferenceMs: inf === null ? null : Math.round(inf * 10) / 10,
-        delegate: provider.info.delegate ?? '',
-        model: provider.info.model,
-        width: frame.imageWidth,
-        height: frame.imageHeight,
-        reducedRate: t.reduced,
-        brightness: t.brightness === null ? null : Math.round(t.brightness),
-      });
-    }
-    onFrameRef.current(frame);
-  }, [opts.mode]);
+      if (opts.mode === 'camera' && video && now - t.lastBrightness > 1000) {
+        t.lastBrightness = now;
+        scratch.current ??= document.createElement('canvas');
+        t.brightness = frameBrightness(video, scratch.current);
+      }
+      if (now - t.lastStats > 1000) {
+        t.lastStats = now;
+        const inf = median(t.inference);
+        if (inf !== null && inf > 45 && !t.reduced && opts.mode === 'camera') t.reduced = true;
+        const span = (t.frameTimes[t.frameTimes.length - 1] ?? 0) - (t.frameTimes[0] ?? 0);
+        const fps = t.frameTimes.length > 5 && span > 0 ? ((t.frameTimes.length - 1) / span) * 1000 : null;
+        setStats({
+          fps: fps === null ? null : Math.round(fps),
+          inferenceMs: inf === null ? null : Math.round(inf * 10) / 10,
+          delegate: provider.info.delegate ?? '',
+          model: provider.info.model,
+          width: frame.imageWidth,
+          height: frame.imageHeight,
+          reducedRate: t.reduced,
+          brightness: t.brightness === null ? null : Math.round(t.brightness),
+        });
+      }
+      onFrameRef.current(frame);
+    },
+    [opts.mode, cameraLost],
+  );
 
   const startLoop = useCallback(() => {
     stopLoop();
     activeRef.current = true;
-    const loop = () => {
+    const loop = (now: number) => {
       if (!activeRef.current) return;
       loopRef.current = requestAnimationFrame(loop);
-      step();
+      // One bad frame must never end the session: report the first failure and keep going.
+      try {
+        step(now);
+        onRenderRef.current?.(now);
+      } catch (err) {
+        if (!reportedError.current) {
+          reportedError.current = true;
+          console.error('PocketRehab live loop: a frame failed and was skipped.', err);
+        }
+      }
     };
     loopRef.current = requestAnimationFrame(loop);
   }, [step]);
 
   const start = useCallback(async () => {
+    const gen = ++generation.current;
+    const current = () => gen === generation.current && mounted.current;
     setError(null);
-    timings.current = { frameTimes: [], inference: [], reduced: false, lastProcessed: 0, lastStats: 0, lastBrightness: 0, brightness: null };
+    timings.current = { frameTimes: [], inference: [], reduced: false, lastProcessed: 0, lastStats: 0, lastBrightness: 0, brightness: null, videoTime: -1, videoTimeAt: 0 };
     if (opts.mode === 'simulated') {
       if (!opts.def) return;
-      providerRef.current = new SimulatedPoseProvider(opts.def, opts.side, { holdSeconds: opts.holdSeconds });
-      await providerRef.current.init();
+      const provider = new SimulatedPoseProvider(opts.def, opts.side, { holdSeconds: opts.holdSeconds });
+      await provider.init();
+      if (!current()) return provider.close();
+      providerRef.current = provider;
       setStatus('running');
       startLoop();
       return;
@@ -149,11 +194,9 @@ export function usePoseStage(opts: {
     try {
       setStatus('requesting-camera');
       const cam = await openCamera(() => {
-        stopLoop();
-        setStatus('error');
-        setError(new CameraError('unknown', 'The camera stopped or was disconnected.'));
-        onLostRef.current();
+        if (gen === generation.current) cameraLost();
       });
+      if (!current()) return cam.stop();
       cameraRef.current = cam;
       const video = videoRef.current;
       if (video) {
@@ -162,21 +205,30 @@ export function usePoseStage(opts: {
         video.playsInline = true;
         await video.play().catch(() => undefined);
       }
+      if (!current()) return;
       setStatus('loading-model');
       if (!providerRef.current) {
         const provider = new MediaPipePoseProvider(opts.modelVariant);
-        await provider.init();
+        try {
+          await provider.init();
+        } catch (err) {
+          provider.close();
+          throw err;
+        }
+        if (!current()) return provider.close();
         providerRef.current = provider;
       }
       setStatus('running');
       startLoop();
     } catch (err) {
+      if (gen !== generation.current) return;
       cameraRef.current?.stop();
       cameraRef.current = null;
+      if (!mounted.current) return;
       setStatus('error');
       setError(err instanceof PoseModelError ? err : mapCameraError(err));
     }
-  }, [opts.mode, opts.def, opts.side, opts.modelVariant, opts.holdSeconds, startLoop]);
+  }, [opts.mode, opts.def, opts.side, opts.modelVariant, opts.holdSeconds, startLoop, cameraLost]);
 
   /** Re-attaches the existing stream to a newly mounted <video> (e.g. after a layout change). */
   const reattach = useCallback(() => {
@@ -187,7 +239,13 @@ export function usePoseStage(opts: {
     }
   }, []);
 
-  useEffect(() => () => stop(), [stop]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      stop();
+      mounted.current = false;
+    };
+  }, [stop]);
 
   return { videoRef, status, error, stats, start, stop, reattach };
 }

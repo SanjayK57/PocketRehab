@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppDataProvider, useAppData } from './AppData';
 import { AppShell } from './AppShell';
@@ -22,6 +22,11 @@ import { WeeklySummaryPage } from '@/features/analytics/WeeklySummaryPage';
 import { CheckInPage } from '@/features/check-ins/CheckInPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AboutPage } from '@/features/settings/AboutPage';
+import { AccountScreen } from '@/features/accounts/AccountScreen';
+import { useAccountState } from '@/features/accounts/accountUi';
+import { useAutoLock, useAutoLockHold } from '@/features/accounts/autoLock';
+import { forgetGoogle } from '@/features/accounts/google';
+import { MeasurementsPage } from '@/features/measurements/MeasurementsPage';
 
 // Heavier screens load on demand: the live session pulls in the pose model; reports pull in the PDF library.
 const LiveSessionPage = lazy(() => import('@/features/live-coaching/LiveSessionPage').then((m) => ({ default: m.LiveSessionPage })));
@@ -29,6 +34,31 @@ const ReportPage = lazy(() => import('@/features/reports/ReportPage').then((m) =
 
 function Lazy({ children }: { children: ReactNode }) {
   return <Suspense fallback={<LoadingBlock label="Loading" />}>{children}</Suspense>;
+}
+
+/** Someone exercising may not touch the device for minutes: never auto-lock mid-session. */
+function KeepUnlocked({ children }: { children: ReactNode }) {
+  useAutoLockHold();
+  return children;
+}
+
+/**
+ * No account open → the account screen. An open account gets its own data
+ * provider (keyed by id), so switching accounts can never show the last
+ * account's data for a frame.
+ */
+function AccountGate() {
+  const { account } = useAccountState();
+  useAutoLock(account);
+  useEffect(() => {
+    if (!account) forgetGoogle();
+  }, [account]);
+  if (!account) return <AccountScreen />;
+  return (
+    <AppDataProvider key={account.id}>
+      <Gate />
+    </AppDataProvider>
+  );
 }
 
 function Gate() {
@@ -77,9 +107,11 @@ function Gate() {
         <Route
           path="session/:prescribedId"
           element={
-            <Lazy>
-              <LiveSessionPage />
-            </Lazy>
+            <KeepUnlocked>
+              <Lazy>
+                <LiveSessionPage />
+              </Lazy>
+            </KeepUnlocked>
           }
         />
         <Route path="progress" element={<ProgressPage />} />
@@ -87,6 +119,7 @@ function Gate() {
         <Route path="progress/session/:id" element={<SessionDetailPage />} />
         <Route path="progress/compare" element={<ComparePage />} />
         <Route path="progress/week" element={<WeeklySummaryPage />} />
+        <Route path="progress/measurements" element={<MeasurementsPage />} />
         <Route
           path="progress/report"
           element={
@@ -121,9 +154,7 @@ export function App() {
   return (
     <HashRouter>
       <ToastProvider>
-        <AppDataProvider>
-          <Gate />
-        </AppDataProvider>
+        <AccountGate />
       </ToastProvider>
     </HashRouter>
   );

@@ -33,16 +33,16 @@ export function Dialog({ open, onClose, title, children, actions, dismissible = 
       onClick={(e) => {
         if (dismissible && e.target === ref.current) onClose();
       }}
-      className="m-auto w-[min(34rem,calc(100vw-2rem))] rounded-[var(--radius-card)] bg-surface p-0 text-ink shadow-[0_24px_64px_-16px_rgb(0_0_0/0.4)] backdrop:bg-[rgb(18_20_22/0.55)]"
+      className="m-auto w-[min(34rem,calc(100vw-2rem))] rounded-[calc(var(--radius-card)+4px)] bg-surface p-0 text-ink shadow-[var(--shadow-float)] backdrop:bg-[rgb(18_20_22/0.5)]"
     >
       {open ? (
         <div className="p-6">
           <div className="mb-3 flex items-start justify-between gap-4">
-            <h2 id={headingId} className="text-xl font-bold">
+            <h2 id={headingId} className="text-[1.375rem] leading-tight font-bold tracking-[-0.015em]">
               {title}
             </h2>
             {dismissible ? (
-              <button type="button" onClick={onClose} className="-mr-2 -mt-1 rounded-full p-2 text-ink-2 hover:bg-surface-2 hover:text-ink" aria-label="Close">
+              <button type="button" onClick={onClose} className="-mr-2 -mt-1 rounded-full p-2 text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink" aria-label="Close">
                 <X aria-hidden className="size-5" />
               </button>
             ) : null}

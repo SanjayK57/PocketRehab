@@ -3,11 +3,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { CheckCircle2, CircleHelp, Download, FileUp, MinusCircle, ShieldCheck, Trash2, XCircle } from 'lucide-react';
 import type { Preferences, Profile } from '@/lib/validation/schemas';
 import { useAppData } from '@/app/AppData';
-import { clearAllData, exportAllData, importAllData, removeDemoData, saveProfile } from '@/lib/storage/repositories';
-import { closeDb } from '@/lib/storage/db';
+import { clearAllData, exportAllData, importAllData, readBackupFile, saveProfile } from '@/lib/storage/repositories';
+import { isEncryptedBackup } from '@/lib/storage/accounts';
 import { detectCapabilities, type Capability } from '@/lib/capabilities/detect';
-import { downloadJson, fileStamp, readJsonFile } from '@/lib/export/download';
-import { createDemoProfile } from '@/features/onboarding/demoProfile';
+import { downloadJson, fileStamp } from '@/lib/export/download';
+import { exploreDemo } from '@/features/accounts/demo';
+import { AccountSection, DriveBackupSection, RestoreSealedDialog } from './AccountSettings';
 import { Button, ChoiceGroup, Field, LoadingBlock, Notice, PageHeader, Section, Select, TextInput, cx } from '@/components/ui';
 import { ConfirmDialog } from '@/components/Dialog';
 import { useToast } from '@/components/Toast';
@@ -20,6 +21,7 @@ export function SettingsPage() {
     <div>
       <PageHeader title="Profile & Settings" description="Your preferences, privacy controls, and what this device supports." actions={<Link to="/settings/about" className="font-bold text-accent-strong underline underline-offset-4">About PocketRehab and safety</Link>} />
       <nav aria-label="Settings sections" className="mb-10 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold text-accent-strong">
+        <a href="#account" className="underline-offset-4 hover:underline">Account</a>
         <a href="#profile" className="underline-offset-4 hover:underline">Profile</a>
         <a href="#coaching" className="underline-offset-4 hover:underline">Coaching & accessibility</a>
         <a href="#tracking" className="underline-offset-4 hover:underline">Camera tracking</a>
@@ -27,10 +29,12 @@ export function SettingsPage() {
         <a href="#capabilities" className="underline-offset-4 hover:underline">This device</a>
       </nav>
       <div className="max-w-3xl space-y-14">
+        <AccountSection />
         <ProfileSection key={`p-${profile.updatedAt}`} profile={profile} />
         <PreferencesSection key={`c-${profile.updatedAt}`} profile={profile} />
         <TrackingSection profile={profile} />
         <PrivacySection profile={profile} />
+        <DriveBackupSection />
         <CapabilitiesSection />
       </div>
     </div>
@@ -152,8 +156,9 @@ function PrivacySection({ profile }: { profile: Profile }) {
   const toast = useToast();
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [confirm, setConfirm] = useState<null | 'clear' | 'import' | 'demo'>(null);
+  const [confirm, setConfirm] = useState<null | 'clear' | 'import'>(null);
   const [pendingImport, setPendingImport] = useState<unknown>(null);
+  const [sealedImport, setSealedImport] = useState<{ file: unknown; from: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [persist, setPersist] = useState<boolean | null>(null);
@@ -180,13 +185,13 @@ function PrivacySection({ profile }: { profile: Profile }) {
         <p className="flex gap-2.5">
           <ShieldCheck aria-hidden className="mt-1 size-5 shrink-0 text-tape" />
           <span>
-            <strong>Storage:</strong> everything is kept in this browser on this device (IndexedDB). It doesn’t sync to other devices and isn’t a medical record system. Clearing your browser’s site data deletes it.
+            <strong>Storage:</strong> everything is kept in this browser on this device (IndexedDB), encrypted with your account’s password (AES-256-GCM). It doesn’t sync to other devices unless you back it up, and it isn’t a medical record system. Clearing your browser’s site data deletes it.
           </span>
         </p>
         <p className="flex gap-2.5">
           <ShieldCheck aria-hidden className="mt-1 size-5 shrink-0 text-tape" />
           <span>
-            <strong>Network:</strong> PocketRehab has no accounts, no server, no analytics and no ads. The only files it downloads are its own app files and the pose model from the same website. If you turn on voice commands, some browsers send the audio to their own speech service.
+            <strong>Network:</strong> PocketRehab has no server, no analytics and no ads; accounts exist only on this device. It downloads its own app files and the pose model from the same website. It contacts Google only when you use Google Drive backup, and sends only encrypted data. If you turn on voice commands, some browsers send the audio to their own speech service.
           </span>
         </p>
         <p className="text-sm text-ink-2">
@@ -214,8 +219,12 @@ function PrivacySection({ profile }: { profile: Profile }) {
               e.target.value = '';
               if (!f) return;
               try {
-                setPendingImport(await readJsonFile(f));
-                setConfirm('import');
+                const raw = await readBackupFile(f);
+                if (isEncryptedBackup(raw)) setSealedImport({ file: raw, from: f.name });
+                else {
+                  setPendingImport(raw);
+                  setConfirm('import');
+                }
               } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
               }
@@ -223,20 +232,24 @@ function PrivacySection({ profile }: { profile: Profile }) {
           />
         </div>
         <p className="text-sm text-ink-2">
-          Delete single sessions from{' '}
+          Readings from your clinic or your own notes go in{' '}
+          <Link to="/progress/measurements" className="font-semibold text-accent-strong underline underline-offset-4">
+            Your measurements
+          </Link>
+          . Delete single sessions from{' '}
           <Link to="/progress/history" className="font-semibold text-accent-strong underline underline-offset-4">
             Session history
           </Link>
           .
         </p>
-        {profile.isDemo ? (
-          <Button variant="secondary" onClick={async () => { await removeDemoData(); toast.show('Demo profile removed.'); }}>
-            Remove the demo profile
-          </Button>
-        ) : (
-          <Button variant="quiet" onClick={() => setConfirm('demo')}>
-            Explore the demo profile instead…
-          </Button>
+        {profile.isDemo ? null : (
+          <p className="text-sm text-ink-2">
+            Want to see PocketRehab with a few weeks of sample data?{' '}
+            <button type="button" className="font-semibold text-accent-strong underline underline-offset-4" onClick={() => void exploreDemo().catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))}>
+              Explore the demo
+            </button>
+            . It opens as a separate account; your data stays as it is.
+          </p>
         )}
         <div className="pt-2">
           <Button variant="danger" onClick={() => setConfirm('clear')} icon={<Trash2 aria-hidden className="size-4" />}>
@@ -256,13 +269,12 @@ function PrivacySection({ profile }: { profile: Profile }) {
         onConfirm={async () => {
           setBusy(true);
           await clearAllData();
-          await closeDb();
           setBusy(false);
           setConfirm(null);
           navigate('/welcome');
         }}
       >
-        <p>This removes your profile, plan history, sessions, check-ins and settings from this browser. There is no cloud copy, so this can’t be undone unless you exported a backup.</p>
+        <p>This removes your profile, plan history, sessions, check-ins and measurements from this account. The account itself stays (to remove it too, use Delete account at the top of Settings). This can’t be undone unless you made a backup.</p>
       </ConfirmDialog>
       <ConfirmDialog
         open={confirm === 'import'}
@@ -285,23 +297,7 @@ function PrivacySection({ profile }: { profile: Profile }) {
       >
         <p>Everything currently on this device will be replaced by the backup. The file is checked first; if it isn’t a valid PocketRehab backup, nothing changes.</p>
       </ConfirmDialog>
-      <ConfirmDialog
-        open={confirm === 'demo'}
-        onCancel={() => setConfirm(null)}
-        title="Switch to the demo profile?"
-        confirmLabel="Delete my data and load the demo"
-        danger
-        busy={busy}
-        onConfirm={async () => {
-          setBusy(true);
-          await createDemoProfile();
-          setBusy(false);
-          setConfirm(null);
-          navigate('/');
-        }}
-      >
-        <p>The demo replaces your data on this device with simulated sample data. Export a backup first if you want to keep your own data.</p>
-      </ConfirmDialog>
+      <RestoreSealedDialog backup={sealedImport} onClose={() => setSealedImport(null)} />
     </Section>
   );
 }

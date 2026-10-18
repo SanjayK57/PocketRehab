@@ -2,23 +2,37 @@ import type { MutableRefObject } from 'react';
 import type { PoseFrame } from '@/types/pose';
 import type { ExerciseDefinition } from '@/types/exercise';
 import type { BodySide } from '@/lib/validation/schemas';
+import { Figure3D } from './Figure3D';
 
-/**
- * Full-bleed 3D scene for the clearly labelled simulated demo: a sculpted
- * figure driven by the latest simulated pose frame (read from `frameRef` every
- * animation frame), drawn behind the AR overlay canvas.
- * Contract placeholder: the simulation feature replaces this implementation.
- */
 export interface SimulatedStageProps {
   frameRef: MutableRefObject<PoseFrame | null>;
   def: ExerciseDefinition;
   side: BodySide;
-  /** When true, render a still frame instead of animating continuously. */
+  /** Kept for API symmetry; the stage camera never moves, so there is nothing to reduce. */
   reducedMotion: boolean;
   className?: string;
 }
 
-export function SimulatedStage(props: SimulatedStageProps) {
-  void props;
-  return null;
+/**
+ * The simulated session's 3D figure, drawn behind the AR canvas. It reads the
+ * latest simulated frame every animation frame, so it moves exactly as the
+ * engine measures, and its camera matches the frame so the overlay lines up.
+ */
+export function SimulatedStage({ frameRef, def, side, className }: SimulatedStageProps) {
+  return (
+    <Figure3D
+      def={def}
+      side={side}
+      target={null}
+      mode="stage"
+      animateCamera={false}
+      getPose={() => {
+        const f = frameRef.current;
+        return f?.landmarks ? { landmarks: f.landmarks, world: f.world ?? null, frameW: f.imageWidth, frameH: f.imageHeight } : null;
+      }}
+      fallback={null}
+      className={className}
+      label={`Simulated figure performing ${def.name.toLowerCase()}`}
+    />
+  );
 }

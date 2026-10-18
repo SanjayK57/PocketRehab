@@ -1,5 +1,6 @@
 import type { ExerciseDefinition, CompensationRule } from '@/types/exercise';
 import type { MovementFingerprint, QualityFlag, Repetition, TargetRange } from '@/lib/validation/schemas';
+import type { MeasurementMethod, RepCheck } from '@/types/form';
 import { ANALYSIS_CONFIG } from './config';
 import { coefficientOfVariation, median } from './filters';
 import type { RawRep, SegmenterSample } from './segmenter';
@@ -125,7 +126,7 @@ export function targetMet(peak: number, target: TargetRange | null): boolean | n
 export function buildRepetition(
   raw: RawRep,
   def: ExerciseDefinition,
-  opts: { index: number; setIndex: number; target: TargetRange | null; sessionStart: number },
+  opts: { index: number; setIndex: number; target: TargetRange | null; sessionStart: number; checks: RepCheck[] },
 ): Repetition {
   const timing = repTiming(raw, def.segmentation.holdTolerance);
   const total = raw.samples.length;
@@ -155,7 +156,21 @@ export function buildRepetition(
     speedPeaks: validity === 'reliable' ? countSpeedPeaks(raw.samples) : null,
     compensation,
     qualityFlags: [...flags],
+    checks: validity === 'reliable' ? opts.checks : opts.checks.map((c) => ({ ...c, result: 'unknown' as const })),
+    method: dominantMethod(raw.samples),
   };
+}
+
+/** The method used on most measured samples of a repetition (2D when none is recorded). */
+export function dominantMethod(samples: SegmenterSample[]): MeasurementMethod {
+  const counts = new Map<MeasurementMethod, number>();
+  for (const s of samples) if (s.value !== null) counts.set(s.method ?? '2d', (counts.get(s.method ?? '2d') ?? 0) + 1);
+  let best: MeasurementMethod = '2d';
+  let n = 0;
+  counts.forEach((c, m) => {
+    if (c > n) [best, n] = [m, c];
+  });
+  return best;
 }
 
 function round1(v: number): number {

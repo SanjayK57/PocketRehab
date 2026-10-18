@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { FormCheckId, MeasurementMethod } from '@/types/form';
 
 /**
  * Persisted data schemas. Every record written to or read from IndexedDB is
@@ -12,7 +13,7 @@ const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-D
 const timeString = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Expected a HH:MM time');
 const epochMs = z.number().int().nonnegative();
 
-export const exerciseIdSchema = z.enum(['shoulder-abduction', 'elbow-flexion', 'knee-extension', 'sit-to-stand']);
+export const exerciseIdSchema = z.enum(['shoulder-abduction', 'elbow-flexion', 'knee-extension', 'sit-to-stand', 'shoulder-flexion', 'hip-abduction', 'standing-knee-flexion', 'standing-march', 'hip-extension', 'mini-squat']);
 export const bodySideSchema = z.enum(['left', 'right']);
 export const prescribedSideSchema = z.enum(['left', 'right', 'auto']);
 export const cameraViewSchema = z.enum(['front', 'side']);
@@ -115,6 +116,39 @@ export const qualityFlagSchema = z.enum([
   'low-light',
 ]);
 
+// Records keyed by the union types from src/types/form.ts, so adding or removing
+// an id there without updating the stored enum is a compile error (exhaustive, no extras).
+const FORM_CHECK_IDS: Record<FormCheckId, true> = {
+  'elbow-straight': true,
+  'arm-to-side': true,
+  'shoulder-relaxed': true,
+  'trunk-upright': true,
+  'upper-arm-still': true,
+  'start-straight': true,
+  'no-swing': true,
+  'sit-tall': true,
+  'thigh-still': true,
+  'hold-time': true,
+  'stand-tall': true,
+  'controlled-sit': true,
+  'controlled-return': true,
+  'steady-pace': true,
+  'within-target': true,
+};
+const MEASUREMENT_METHODS: Record<MeasurementMethod, true> = { '3d-body-frame': true, hybrid: true, '2d': true, none: true };
+
+export const formCheckIdSchema = z.enum(Object.keys(FORM_CHECK_IDS) as [FormCheckId, ...FormCheckId[]]);
+export const measurementMethodSchema = z.enum(Object.keys(MEASUREMENT_METHODS) as [MeasurementMethod, ...MeasurementMethod[]]);
+
+/** Per-repetition result of one form check (see src/types/form.ts RepCheck). */
+export const repCheckSchema = z.object({
+  id: formCheckIdSchema,
+  label: z.string().max(80),
+  result: z.enum(['pass', 'fail', 'unknown']),
+  value: z.number().nullable(),
+  unit: z.enum(['°', 's', '%']).nullable(),
+});
+
 export const repetitionSchema = z.object({
   index: z.number().int().min(1),
   setIndex: z.number().int().min(1),
@@ -133,6 +167,10 @@ export const repetitionSchema = z.object({
   speedPeaks: z.number().int().nonnegative().nullable(),
   compensation: z.array(z.string()),
   qualityFlags: z.array(qualityFlagSchema),
+  /** Form-check results for this repetition. Defaults keep sessions saved before form checks existed valid. */
+  checks: z.array(repCheckSchema).max(20).default([]),
+  /** How the joint angle was measured for most of this repetition; older sessions were all 2D. */
+  method: measurementMethodSchema.default('2d'),
 });
 
 export const incompleteReasonSchema = z.enum(['below-count-threshold', 'too-fast', 'too-slow', 'tracking-lost']);
@@ -269,6 +307,39 @@ export const frictionReportSchema = z.object({
   note: z.string().max(500),
 });
 
+/**
+ * A reading the user entered or imported themselves (clinic goniometer, pain
+ * score, a count they kept). Always shown with its source, never mixed into
+ * camera statistics.
+ */
+export const MEASUREMENT_KINDS = {
+  angle: { unit: '°', min: -30, max: 200 },
+  pain: { unit: '/10', min: 0, max: 10 },
+  reps: { unit: 'reps', min: 0, max: 1000 },
+  hold: { unit: 's', min: 0, max: 3600 },
+  other: { unit: '', min: -1e6, max: 1e6 },
+} as const;
+export const measurementKindSchema = z.enum(Object.keys(MEASUREMENT_KINDS) as [keyof typeof MEASUREMENT_KINDS, ...Array<keyof typeof MEASUREMENT_KINDS>]);
+
+export const measurementSchema = z
+  .object({
+    id: z.string().min(1).max(80),
+    timestamp: epochMs,
+    kind: measurementKindSchema,
+    label: z.string().trim().min(1).max(80),
+    value: z.number().finite(),
+    unit: z.string().max(12),
+    side: bodySideSchema.nullable(),
+    /** Set when the reading measures the same thing as a library exercise, so it can sit beside the camera's numbers. */
+    exerciseId: z.string().max(60).nullable().default(null),
+    source: z.enum(['manual', 'import']),
+    /** Where the number came from, in the user's words ("Clinic goniometer") or the imported file's name. */
+    sourceLabel: z.string().max(80),
+    note: z.string().max(500),
+    createdAt: epochMs,
+  })
+  .refine((m) => m.value >= MEASUREMENT_KINDS[m.kind].min && m.value <= MEASUREMENT_KINDS[m.kind].max, { message: 'Value is outside the range this kind of measurement allows', path: ['value'] });
+
 /** Shape of a full data export / backup file. */
 export const exportBundleSchema = z.object({
   app: z.literal('PocketRehab'),
@@ -280,6 +351,8 @@ export const exportBundleSchema = z.object({
   checkIns: z.array(checkInSchema),
   scheduleOverrides: z.array(scheduleOverrideSchema),
   frictionReports: z.array(frictionReportSchema),
+  // Optional so backups made before measurements existed still restore.
+  measurements: z.array(measurementSchema).default([]),
 });
 
 /** Shape of a standalone plan file (for sharing a plan between devices or from a clinician). */
@@ -316,5 +389,7 @@ export type CheckIn = z.infer<typeof checkInSchema>;
 export type ScheduleOverride = z.infer<typeof scheduleOverrideSchema>;
 export type FrictionReason = z.infer<typeof frictionReasonSchema>;
 export type FrictionReport = z.infer<typeof frictionReportSchema>;
+export type MeasurementKind = z.infer<typeof measurementKindSchema>;
+export type Measurement = z.infer<typeof measurementSchema>;
 export type ExportBundle = z.infer<typeof exportBundleSchema>;
 export type PlanFile = z.infer<typeof planFileSchema>;

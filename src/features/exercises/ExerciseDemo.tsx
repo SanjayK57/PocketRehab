@@ -1,9 +1,10 @@
+import { Figure3D } from '@/features/simulation/Figure3D';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Maximize2, Pause, Play, SkipForward } from 'lucide-react';
 import type { ExerciseDefinition } from '@/types/exercise';
 import type { BodySide } from '@/lib/validation/schemas';
 import { LM, SKELETON_CONNECTIONS, type Landmark } from '@/types/pose';
-import { SYNTHETIC_FRAME, buildSyntheticPose } from '@/features/pose-estimation/synthetic';
+import { SYNTHETIC_FRAME, buildSyntheticBody, buildSyntheticPose } from '@/features/pose-estimation/synthetic';
 import { Dialog } from '@/components/Dialog';
 import { cx } from '@/components/ui';
 import { useAppData } from '@/app/AppData';
@@ -77,7 +78,7 @@ export function DemoFigure({ def, side, value, className }: { def: ExerciseDefin
   const P = (lm: Landmark | undefined) => ({ x: (lm?.x ?? 0) * SYNTHETIC_FRAME.width, y: (lm?.y ?? 0) * SYNTHETIC_FRAME.height });
   const { a, b, c } = def.metric.landmarks[side];
   const moving = def.metric.moving === 'c' ? [b, c] : [a, b];
-  const seated = def.id === 'knee-extension' || def.id === 'sit-to-stand';
+  const seated = def.demo.pose.posture === 'seated';
   const hip = P(lms[side === 'left' ? LM.leftHip : LM.rightHip]);
   const knee = P(lms[side === 'left' ? LM.leftKnee : LM.rightKnee]);
   const head = P(lms[LM.nose]);
@@ -177,7 +178,20 @@ export function ExerciseDemo({ def, side, holdSeconds = 0, size = 'small', autop
   return (
     <div className={cx('rounded-[var(--radius-card)] bg-surface text-ink', className)}>
       <div className={cx('mx-auto', size === 'large' ? 'max-w-md' : 'max-w-[15rem]')}>
-        <DemoFigure def={def} side={side} value={value} className="aspect-square w-full" />
+        <Figure3D
+          def={def}
+          side={side}
+          target={null}
+          mode="demo"
+          animateCamera={playing && !reduced}
+          getPose={() => {
+            const b = buildSyntheticBody(def, side, value);
+            return { landmarks: b.landmarks, world: b.world, frameW: SYNTHETIC_FRAME.width, frameH: SYNTHETIC_FRAME.height };
+          }}
+          fallback={<DemoFigure def={def} side={side} value={value} className="aspect-square w-full" />}
+          className="aspect-square w-full rounded-[var(--radius-card)]"
+          label={`3D demonstration of ${def.name.toLowerCase()}: ${phaseInfo?.label ?? ''}`}
+        />
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-rule px-3 py-2">
         <p className="min-w-0 text-sm" aria-live="off">

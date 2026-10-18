@@ -1,277 +1,249 @@
-import type { Landmark, Point2 } from '@/types/pose';
-import { SKELETON_CONNECTIONS } from '@/types/pose';
+import type { Landmark, Point2, WorldLandmark } from '@/types/pose';
 import type { ExerciseDefinition } from '@/types/exercise';
-import type { TargetRange, ValidityState } from '@/lib/validation/schemas';
+import type { LiveForm } from '@/types/form';
+import type { BodySide, TargetRange, ValidityState } from '@/lib/validation/schemas';
 import { ANALYSIS_CONFIG } from '@/features/movement-analysis/config';
-import { arcAngles, ghostEndpoint, jointGeometry, type JointGeometry } from './arGeometry';
-import type { TrafficLight } from './coach';
+import { drawBody, drawFramingGuide, type BodyPoint, type BodyPoints, type GuidePose } from './arBody';
+import { coverTransform, jointGeometry, type Rect } from './arGeometry';
+import { drawChips, drawGhost, drawGoniometer, drawHoldRing, drawTrail, type ChipSpec } from './arMeasure';
+import { clamp, readTheme, themeKey, type OverlayTheme } from './arTheme';
+export { readTheme }; // still imported from here by CameraTest and LiveStage
 
 /**
- * Draws the AR layer on a canvas sized to the video's display box:
- *  1. skeleton (landmarks dim when not reliable),
- *  2. target zone anchored to the tracked joint (the configured range, as a band),
- *  3. ghost guide segment showing where the movement goes,
- *  4. live angle arc with the value,
- *  5. floating repetition counter and tracking-quality badge next to the joint.
- * Nothing is drawn for a landmark the model did not return.
+ * Draws the AR layer on a canvas sized to the stage, in this order:
+ *  1. setup framing guide (where to stand or sit),
+ *  2. the tracked body as tapered, depth-shaded capsules with the measured limb in cyan,
+ *  3. ghost guide limb and direction arrow,
+ *  4. goniometer dial with target tape, needle and readout,
+ *  5. hold ring, motion trail and check chips pinned to joints.
+ * Nothing is drawn for a landmark the model did not return, and no form
+ * judgement (pink) is drawn unless tracking is reliable.
  */
 
-export interface OverlayInput {
+export interface OverlayPose {
   landmarks: Landmark[] | null;
-  /** Source frame size (the model's coordinate space). */
+  world: WorldLandmark[] | null;
+  /** The metric's three points in source-frame pixels. */
+  points: { a: Point2; b: Point2; c: Point2 } | null;
   frameWidth: number;
   frameHeight: number;
+}
+
+export type OverlayStage = 'setup' | 'countdown' | 'active' | 'idle';
+
+export interface OverlayInput {
+  pose: OverlayPose;
   def: ExerciseDefinition;
-  side: 'left' | 'right';
+  side: BodySide;
   value: number | null;
-  points: { a: Point2; b: Point2; c: Point2 } | null;
   target: TargetRange | null;
   quality: ValidityState;
-  light: TrafficLight;
-  reps: number;
-  repsTarget: number;
-  /** 0..1 phase of the ghost guide animation; null shows the target position. */
-  ghostPhase: number | null;
+  form: LiveForm | null;
+  stage: OverlayStage;
+  /** All setup checks pass: the framing guide turns cyan. */
+  setupFitted: boolean;
   mirrored: boolean;
-  showGuides: boolean;
+  /** Draw the tracked body (off when a 3D figure is already showing it). */
+  showBody: boolean;
+  /** Draw the dial, ghost, chips and trail on the joint. */
+  showInstruments: boolean;
+  reducedMotion: boolean;
+  now: number;
+  /** On-stage HUD areas (CSS pixels, canvas space) that labels must not cover. */
+  avoid: Rect[];
 }
 
-export interface OverlayTheme {
-  tape: string;
-  accent: string;
-  accentSoft: string;
-  signal: string;
-  ok: string;
-  warn: string;
-  ink: string;
-  paper: string;
-  font: string;
-  mono: string;
+/** Per-canvas memory between frames: cached theme, label positions, the motion trail. */
+export class OverlayState {
+  theme: OverlayTheme | null = null;
+  sign: 1 | -1 | null = null;
+  readoutAngle: number | null = null;
+  trail: Array<{ x: number; y: number; t: number }> = [];
+
+  reset(): void {
+    this.sign = null;
+    this.readoutAngle = null;
+    this.trail = [];
+  }
 }
 
-export function readTheme(el: Element): OverlayTheme {
-  const css = getComputedStyle(el);
-  const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
-  return {
-    tape: v('--color-tape', '#0a8fb8'),
-    accent: v('--color-accent', '#0a7ea4'),
-    accentSoft: v('--color-accent-soft', '#dcf'),
-    signal: v('--color-signal', '#c2306e'),
-    ok: v('--color-ok', '#2f7a4a'),
-    warn: v('--color-warn', '#9a5b00'),
-    ink: v('--color-ink', '#1d1f22'),
-    paper: v('--color-surface', '#fffdf9'),
-    font: v('--font-sans', 'sans-serif'),
-    mono: v('--font-mono', 'monospace'),
-  };
+const TRAIL_MS = 450;
+const DISTAL: Record<number, number> = { 13: 15, 14: 16, 25: 27, 26: 28 };
+const TORSO_SIDES = new Set(['11-23', '12-24']);
+
+/** Keeps the canvas backing store matched to its CSS size and device pixel ratio (capped at 2). */
+export function fitCanvas(canvas: HTMLCanvasElement): number {
+  const dpr = Math.min(2, typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  return dpr;
 }
 
-/** Maps frame coordinates to the canvas's object-fit: cover box. */
-export function coverTransform(frameW: number, frameH: number, boxW: number, boxH: number) {
-  const scale = Math.max(boxW / frameW, boxH / frameH);
-  const offX = (boxW - frameW * scale) / 2;
-  const offY = (boxH - frameH * scale) / 2;
-  return { scale, offX, offY };
+export function guidePoseFor(def: ExerciseDefinition): GuidePose {
+  if (def.cameraView === 'front') return 'front-standing';
+  return def.demo.pose.posture === 'seated' ? 'side-seated' : 'side-standing';
 }
 
-let lastSign: 1 | -1 | null = null;
-
-export function drawOverlay(ctx: CanvasRenderingContext2D, input: OverlayInput, theme: OverlayTheme): void {
+export function drawOverlay(ctx: CanvasRenderingContext2D, input: OverlayInput, state: OverlayState): void {
   const { canvas } = ctx;
-  const dpr = canvas.width / Math.max(1, canvas.clientWidth);
   const W = canvas.clientWidth;
   const H = canvas.clientHeight;
+  if (W === 0 || H === 0) return;
+  const dpr = canvas.width / W;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
-  if (!input.landmarks || input.frameWidth === 0) return;
+  if (!state.theme || state.theme.key !== themeKey()) state.theme = readTheme(canvas);
+  const theme = state.theme;
+  const { pose, def } = input;
 
-  const { scale, offX, offY } = coverTransform(input.frameWidth, input.frameHeight, W, H);
+  if (input.stage === 'setup' && input.showBody) {
+    const facing: 1 | -1 = (input.side === 'right') !== input.mirrored ? 1 : -1;
+    const pulse = input.reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(input.now / 520);
+    drawFramingGuide(ctx, { w: W, h: H, dpr, pose: guidePoseFor(def), facing, fitted: input.setupFitted, pulse }, theme);
+  }
+
+  const lms = pose.landmarks;
+  if (!lms || pose.frameWidth <= 0 || pose.frameHeight <= 0) {
+    state.trail = [];
+    return;
+  }
+
+  const { scale, offX, offY } = coverTransform(pose.frameWidth, pose.frameHeight, W, H);
   const toCanvas = (p: Point2): Point2 => {
     const x = p.x * scale + offX;
     return { x: input.mirrored ? W - x : x, y: p.y * scale + offY };
   };
-  const lmPx = (lm: Landmark): Point2 => toCanvas({ x: lm.x * input.frameWidth, y: lm.y * input.frameHeight });
-  const reliableVis = ANALYSIS_CONFIG.visibilityReliable;
-  const usableVis = ANALYSIS_CONFIG.visibilityUsable;
-
-  // 1. Skeleton
-  ctx.lineCap = 'round';
-  for (const [i, j] of SKELETON_CONNECTIONS) {
-    const a = input.landmarks[i];
-    const b = input.landmarks[j];
-    if (!a || !b || a.visibility < usableVis || b.visibility < usableVis) continue;
-    const pa = lmPx(a);
-    const pb = lmPx(b);
-    const strong = a.visibility >= reliableVis && b.visibility >= reliableVis;
-    ctx.strokeStyle = strong ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = strong ? 3 : 2;
-    ctx.setLineDash(strong ? [] : [4, 6]);
-    ctx.beginPath();
-    ctx.moveTo(pa.x, pa.y);
-    ctx.lineTo(pb.x, pb.y);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  for (const idx of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
-    const lm = input.landmarks[idx];
-    if (!lm || lm.visibility < usableVis) continue;
-    const p = lmPx(lm);
-    ctx.fillStyle = lm.visibility >= reliableVis ? '#ffffff' : 'rgba(255,255,255,0.4)';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  if (!input.points) return;
-  const pts = { a: toCanvas(input.points.a), b: toCanvas(input.points.b), c: toCanvas(input.points.c) };
-  const g = jointGeometry(input.def, pts, lastSign);
-  if (!g) return;
-  lastSign = g.sign;
+  const body = bodyPoints(lms, pose.world, pose.frameWidth, pose.frameHeight, toCanvas);
+  const torso = torsoLength(body);
+  const { a, b, c } = def.metric.landmarks[input.side];
   const reliable = input.quality === 'reliable';
-  const radius = clamp(g.length * 0.85, 46, 150);
-  const bandWidth = clamp(radius * 0.32, 14, 40);
 
-  if (input.showGuides && input.target) {
-    // 2. Target zone: a thick band between the target's min and max, on the user's joint.
-    const zone = arcAngles(input.def, g, input.target.min, input.target.max);
-    const inZone = input.value !== null && input.value >= input.target.min && input.value <= input.target.max && reliable;
-    ctx.strokeStyle = inZone ? withAlpha(theme.tape, 0.92) : withAlpha(theme.tape, 0.42);
-    ctx.lineWidth = bandWidth;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.arc(g.vertex.x, g.vertex.y, radius, zone.start, zone.end, zone.anticlockwise);
-    ctx.stroke();
-    const mid = ghostEndpoint(input.def, g, (input.target.min + input.target.max) / 2, (radius + bandWidth / 2 + 44) / Math.max(1, g.length));
-    label(ctx, mid, `target ${input.target.min}–${input.target.max}°`, theme, 'rgba(18,20,22,0.72)', '#fff', 12);
+  if (input.showBody) {
+    const measured: Array<readonly [number, number]> = [];
+    for (const [i, j] of [
+      [a, b],
+      [b, c],
+    ] as const) {
+      if (!TORSO_SIDES.has(i < j ? `${i}-${j}` : `${j}-${i}`)) measured.push([i, j]);
+    }
+    // When one arm of the angle is the trunk (arm raise), light the whole moving limb instead.
+    const moving = def.metric.moving === 'c' ? c : a;
+    const distal = DISTAL[moving];
+    if (measured.length < 2 && distal !== undefined) measured.push([moving, distal]);
+    drawBody(ctx, body, {
+      unit: torso ?? H * 0.3,
+      measured,
+      measuredColor: reliable ? theme.tape : theme.warn,
+      measuredCore: reliable ? theme.tapeLight : theme.warnLight,
+    });
   }
 
-  if (input.showGuides) {
-    // 3. Ghost guide: a translucent segment from the user's joint showing the movement path.
-    const guideValue = ghostValue(input);
-    if (guideValue !== null) drawGhost(ctx, input.def, g, guideValue, theme);
+  if (!input.showInstruments || !pose.points) {
+    state.trail = [];
+    return;
+  }
+  const pts = { a: toCanvas(pose.points.a), b: toCanvas(pose.points.b), c: toCanvas(pose.points.c) };
+  const g = jointGeometry(def, pts, state.sign);
+  if (!g) return;
+  state.sign = g.sign;
+  const guide = input.form?.guide ?? null;
+  const target = input.target;
+  const goal = target ? (target.min + target.max) / 2 : def.demo.peak;
+  const animate = !input.reducedMotion;
+
+  // Ghost guide: before the exercise it demonstrates the movement; during it, it shows the next position.
+  let ghostValue: number | null = null;
+  let arrow = false;
+  if (input.stage === 'setup' || input.stage === 'countdown') {
+    const phase = animate ? (input.now / 4200) % 1 : 0.5;
+    const t = 0.5 - Math.cos(phase * Math.PI * 2) / 2;
+    ghostValue = def.demo.neutral + (goal - def.demo.neutral) * t;
+  } else if (input.stage === 'active') {
+    const p = guide?.phase ?? 'move';
+    if (p === 'return') ghostValue = def.demo.neutral;
+    else if (p !== 'hold') ghostValue = goal;
+    arrow = reliable && p !== 'hold' && !guide?.pastTarget;
+  }
+  if (ghostValue !== null) {
+    drawGhost(ctx, { def, g, ghostValue, liveValue: input.value, thickness: (torso ?? H * 0.3) * 0.06, arrow, now: input.now, animate }, theme);
   }
 
-  // 4. Live angle arc from the neutral reference to the current value.
-  if (input.value !== null) {
-    const from = input.def.metric.transform === 'supplement' ? 0 : Math.min(input.value, input.def.demo.neutral);
-    const arc = arcAngles(input.def, g, from, input.value);
-    ctx.strokeStyle = reliable ? '#ffffff' : '#e3a948';
-    ctx.lineWidth = 3;
-    ctx.setLineDash(reliable ? [] : [6, 6]);
-    ctx.beginPath();
-    ctx.arc(g.vertex.x, g.vertex.y, radius * 0.55, arc.start, arc.end, arc.anticlockwise);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = reliable ? '#ffffff' : '#e3a948';
-    ctx.beginPath();
-    ctx.arc(g.vertex.x, g.vertex.y, 7, 0, Math.PI * 2);
-    ctx.fill();
+  // Motion trail behind the moving joint (real movement only, not decoration).
+  const movingPt = def.metric.moving === 'c' ? pts.c : pts.a;
+  if (reliable && input.stage === 'active') {
+    state.trail.push({ x: movingPt.x, y: movingPt.y, t: input.now });
+    while (state.trail.length && input.now - (state.trail[0]?.t ?? 0) > TRAIL_MS) state.trail.shift();
+    drawTrail(ctx, state.trail, input.now, TRAIL_MS, clamp((torso ?? 200) * 0.05, 3, 9), theme);
+  } else {
+    state.trail = [];
   }
 
-  // 5. Floating counter + quality badge beside the joint, on the side away from the moving limb.
-  const towardTarget = ghostEndpoint(input.def, g, input.target ? (input.target.min + input.target.max) / 2 : input.def.demo.peak);
-  const limbGoesLeft = towardTarget.x < g.vertex.x;
-  const anchor = {
-    x: clamp(limbGoesLeft ? g.vertex.x + 56 : g.vertex.x - 56 - HUD_W, 8, W - HUD_W - 8),
-    y: clamp(g.vertex.y - HUD_H - 28, 8, H - HUD_H - 8),
-  };
-  drawHud(ctx, anchor, input, theme);
+  const dial = drawGoniometer(
+    ctx,
+    { def, g, value: input.value, target, reliable, bounds: { w: W, h: H }, avoid: input.avoid, previousReadoutAngle: state.readoutAngle },
+    theme,
+  );
+  state.readoutAngle = dial.readoutAngle;
+
+  if (guide?.hold && guide.phase === 'hold' && reliable) {
+    drawHoldRing(ctx, g.vertex, clamp((torso ?? 200) * 0.09, 14, 26), guide.hold.heldMs / Math.max(1, guide.hold.requiredMs), theme);
+  }
+
+  // Check chips: form judgements only on reliable tracking; otherwise one honest "uncertain" chip.
+  const chips: ChipSpec[] = [];
+  if (!reliable) {
+    if (input.stage === 'active' || input.stage === 'countdown') chips.push({ anchor: g.vertex, label: input.quality === 'uncertain' ? 'Tracking uncertain' : 'Not measurable', tone: 'uncertain' });
+  } else if (input.form && input.stage === 'active') {
+    for (const check of input.form.checks) {
+      const anchor = check.anchor === null ? null : body[check.anchor];
+      if (!anchor || check.state === 'unknown') continue;
+      if (check.state === 'warn') chips.unshift({ anchor, label: check.label, tone: 'warn' });
+      else chips.push({ anchor, label: check.label, tone: 'ok' });
+    }
+  }
+  const center = bodyCenter(body);
+  drawChips(ctx, chips.slice(0, 4), center, { w: W, h: H }, [...input.avoid, ...(dial.readout ? [dial.readout] : [])], theme);
 }
 
-function ghostValue(input: OverlayInput): number | null {
-  const neutral = input.def.demo.neutral;
-  const peak = input.target ? (input.target.min + input.target.max) / 2 : input.def.demo.peak;
-  if (input.ghostPhase === null) return peak;
-  const t = 0.5 - Math.cos(input.ghostPhase * Math.PI * 2) / 2;
-  return neutral + (peak - neutral) * t;
+/** Landmarks in canvas space with reliability and a 0..1 nearness from depth. */
+function bodyPoints(lms: Landmark[], world: WorldLandmark[] | null, fw: number, fh: number, toCanvas: (p: Point2) => Point2): BodyPoints {
+  const usable = ANALYSIS_CONFIG.visibilityUsable;
+  const reliableVis = ANALYSIS_CONFIG.visibilityReliable;
+  const lh = lms[23];
+  const rh = lms[24];
+  const ls = lms[11];
+  const rs = lms[12];
+  const torsoNorm = lh && rh && ls && rs ? Math.hypot(((ls.x + rs.x - lh.x - rh.x) / 2) * fw, ((ls.y + rs.y - lh.y - rh.y) / 2) * fh) : 0;
+  const hipZ = lh && rh ? (lh.z + rh.z) / 2 : 0;
+  const wl = world && world.length === lms.length ? world : null;
+  const wHipZ = wl && wl[23] && wl[24] ? (wl[23].z + wl[24].z) / 2 : 0;
+
+  return lms.map((lm, i) => {
+    if (!lm || !(lm.visibility >= usable) || !Number.isFinite(lm.x) || !Number.isFinite(lm.y)) return null;
+    let rel = 0;
+    const w = wl?.[i];
+    if (w && Number.isFinite(w.z)) rel = (w.z - wHipZ) / 0.5; // world: metres, torso ≈ 0.5 m
+    else if (torsoNorm > 1 && Number.isFinite(lm.z)) rel = ((lm.z - hipZ) * fw) / torsoNorm; // image z uses the x scale
+    const p = toCanvas({ x: lm.x * fw, y: lm.y * fh });
+    const point: BodyPoint = { x: p.x, y: p.y, reliable: lm.visibility >= reliableVis, depth: clamp(0.5 - rel * 0.9, 0, 1) };
+    return point;
+  });
 }
 
-function drawGhost(ctx: CanvasRenderingContext2D, def: ExerciseDefinition, g: JointGeometry, value: number, theme: OverlayTheme) {
-  const end = ghostEndpoint(def, g, value);
-  ctx.save();
-  ctx.strokeStyle = withAlpha(theme.tape, 0.5);
-  ctx.lineWidth = clamp(g.length * 0.16, 12, 26);
-  ctx.lineCap = 'round';
-  ctx.globalAlpha = 0.9;
-  ctx.beginPath();
-  ctx.moveTo(g.vertex.x, g.vertex.y);
-  ctx.lineTo(end.x, end.y);
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-  ctx.setLineDash([2, 8]);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.moveTo(g.vertex.x, g.vertex.y);
-  ctx.lineTo(end.x, end.y);
-  ctx.stroke();
-  ctx.restore();
+function torsoLength(body: BodyPoints): number | null {
+  const [ls, rs, lh, rh] = [body[11], body[12], body[23], body[24]];
+  if (ls && rs && lh && rh) return Math.hypot((ls.x + rs.x - lh.x - rh.x) / 2, (ls.y + rs.y - lh.y - rh.y) / 2);
+  const s = ls ?? rs;
+  const h = lh ?? rh;
+  return s && h ? Math.hypot(s.x - h.x, s.y - h.y) : null;
 }
 
-const HUD_W = 150;
-const HUD_H = 84;
-
-function drawHud(ctx: CanvasRenderingContext2D, at: Point2, input: OverlayInput, theme: OverlayTheme) {
-  const w = HUD_W;
-  const h = HUD_H;
-  ctx.save();
-  ctx.fillStyle = 'rgba(18,20,22,0.78)';
-  roundRect(ctx, at.x, at.y, w, h, 12);
-  ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `700 30px ${theme.mono}`;
-  ctx.textBaseline = 'top';
-  ctx.fillText(`${input.reps}`, at.x + 12, at.y + 8);
-  const repW = ctx.measureText(`${input.reps}`).width;
-  ctx.font = `500 15px ${theme.font}`;
-  ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.fillText(`/ ${input.repsTarget} reps`, at.x + 18 + repW, at.y + 19);
-  const q = input.quality;
-  const color = q === 'reliable' ? theme.tape : q === 'uncertain' ? '#b7791f' : '#6b6f76';
-  const text = q === 'reliable' ? 'Tracking reliable' : q === 'uncertain' ? 'Tracking uncertain' : 'Not measurable';
-  ctx.fillStyle = withAlpha(color, 0.95);
-  roundRect(ctx, at.x + 10, at.y + 50, w - 20, 24, 12);
-  ctx.fill();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `700 12.5px ${theme.font}`;
-  ctx.fillText(text, at.x + 20, at.y + 56);
-  ctx.restore();
-}
-
-function label(ctx: CanvasRenderingContext2D, at: Point2, text: string, theme: OverlayTheme, bg: string, fg: string, size: number) {
-  ctx.save();
-  ctx.font = `600 ${size}px ${theme.font}`;
-  const w = ctx.measureText(text).width + 14;
-  const x = clamp(at.x - w / 2, 4, ctx.canvas.clientWidth - w - 4);
-  const y = clamp(at.y - 11, 4, ctx.canvas.clientHeight - 26);
-  ctx.fillStyle = bg;
-  roundRect(ctx, x, y, w, 22, 11);
-  ctx.fill();
-  ctx.fillStyle = fg;
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, x + 7, y + 11.5);
-  ctx.restore();
-}
-
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-/** Applies an alpha to a #rrggbb colour. */
-export function withAlpha(hex: string, alpha: number): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return hex;
-  const n = parseInt(m[1] as string, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+function bodyCenter(body: BodyPoints): Point2 | null {
+  const pts = [body[11], body[12], body[23], body[24]].filter((p): p is BodyPoint => !!p);
+  if (!pts.length) return null;
+  return { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length };
 }

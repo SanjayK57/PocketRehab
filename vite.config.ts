@@ -1,5 +1,5 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -11,6 +11,37 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 // BASE_PATH is set to "/PocketRehab/" by the GitHub Pages workflow; "/" everywhere else.
 const base = process.env.BASE_PATH ?? '/';
 
+// Content-Security-Policy for the production build (static hosting can only set it with a <meta> tag).
+// Everything is served from this origin; 'wasm-unsafe-eval' lets the pose model's WebAssembly compile,
+// and mediastream:/blob: let the camera preview play. Tested against the live camera pipeline and PDF export.
+// Not applied in development, where Vite injects inline scripts for hot reload.
+// Google Drive backup (opt-in, src/features/accounts/google.ts) adds exactly two origins: Google's
+// sign-in script and its consent frame (accounts.google.com) and the Drive API (www.googleapis.com).
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com",
+  "frame-src 'self' https://accounts.google.com",
+  "style-src 'self'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  "connect-src 'self' https://www.googleapis.com",
+  "media-src 'self' blob: mediastream:",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
+const securityHeaders = (): Plugin => ({
+  name: 'pocketrehab-security-meta',
+  apply: 'build',
+  transformIndexHtml: () => [
+    { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: CONTENT_SECURITY_POLICY }, injectTo: 'head-prepend' },
+    { tag: 'meta', attrs: { name: 'referrer', content: 'no-referrer' }, injectTo: 'head-prepend' },
+  ],
+});
+
 export default defineConfig({
   base,
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
@@ -18,6 +49,7 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   plugins: [
+    securityHeaders(),
     react(),
     tailwindcss(),
     VitePWA({

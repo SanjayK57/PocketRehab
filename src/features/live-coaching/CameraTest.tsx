@@ -6,7 +6,7 @@ import { ANALYSIS_CONFIG } from '@/features/movement-analysis/config';
 import { CAMERA_ERROR_HELP, CameraError } from '@/features/camera/camera';
 import { Button, Notice } from '@/components/ui';
 import { usePoseStage } from './usePoseStage';
-import { drawOverlay, readTheme } from './arRenderer';
+import { OverlayState, drawOverlay, fitCanvas } from './arRenderer';
 import { useAppData } from '@/app/AppData';
 
 const KEY_POINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
@@ -18,6 +18,7 @@ export function CameraTest() {
   const profile = useAppData().profile;
   const mirrored = profile?.preferences.mirrorPreview ?? true;
   const lastUi = useRef(0);
+  const overlay = useRef(new OverlayState());
 
   const onFrame = (frame: PoseFrame) => {
     const canvas = canvasRef.current;
@@ -26,8 +27,24 @@ export function CameraTest() {
       fitCanvas(canvas);
       drawOverlay(
         ctx,
-        { landmarks: frame.landmarks, frameWidth: frame.imageWidth, frameHeight: frame.imageHeight, def: EXERCISES['shoulder-abduction'], side: 'right', value: null, points: null, target: null, quality: 'unavailable', light: 'idle', reps: 0, repsTarget: 0, ghostPhase: null, mirrored, showGuides: false },
-        readTheme(canvas),
+        {
+          pose: { landmarks: frame.landmarks, world: frame.world ?? null, points: null, frameWidth: frame.imageWidth, frameHeight: frame.imageHeight },
+          def: EXERCISES['shoulder-abduction'],
+          side: 'right',
+          value: null,
+          target: null,
+          quality: 'unavailable',
+          form: null,
+          stage: 'idle',
+          setupFitted: false,
+          mirrored,
+          showBody: true,
+          showInstruments: false,
+          reducedMotion: false,
+          now: frame.timestamp,
+          avoid: [],
+        },
+        overlay.current,
       );
     }
     if (frame.timestamp - lastUi.current > 300) {
@@ -76,13 +93,3 @@ export function CameraTest() {
   );
 }
 
-/** Keeps the canvas backing store matched to its CSS size and device pixel ratio. */
-export function fitCanvas(canvas: HTMLCanvasElement): void {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = Math.round(canvas.clientWidth * dpr);
-  const h = Math.round(canvas.clientHeight * dpr);
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-}

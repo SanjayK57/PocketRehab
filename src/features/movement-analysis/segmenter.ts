@@ -1,5 +1,6 @@
 import type { SegmentationConfig } from '@/types/exercise';
 import type { IncompleteReason, QualityFlag, ValidityState } from '@/lib/validation/schemas';
+import type { MeasurementMethod } from '@/types/form';
 
 /** A smoothed sample fed to the segmenter. `value: null` means no usable measurement at this time. */
 export interface SegmenterSample {
@@ -8,6 +9,8 @@ export interface SegmenterSample {
   state: ValidityState;
   flags: QualityFlag[];
   trunk: number | null;
+  /** How the value was measured (defaults to 2D when absent). */
+  method?: MeasurementMethod;
 }
 
 export type SegmenterPhase = 'waiting' | 'ready' | 'outbound' | 'returning';
@@ -68,6 +71,15 @@ export class RepSegmenter {
 
   get currentPeak(): number | null {
     return this.active?.peakValue ?? null;
+  }
+
+  get currentStart(): number | null {
+    return this.active?.startValue ?? null;
+  }
+
+  /** The repetition in progress (read-only view), if any. */
+  get current(): Readonly<RawRep> | null {
+    return this.active ? { ...this.active, endedAt: this.lastT ?? this.active.peakAt } : null;
   }
 
   push(sample: SegmenterSample): SegmenterEvent[] {

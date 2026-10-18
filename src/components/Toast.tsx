@@ -43,7 +43,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role={t.tone === 'alert' ? 'alert' : 'status'}
-            className={cx('pointer-events-auto flex max-w-md items-start gap-3 rounded-[var(--radius-control)] bg-ink px-4 py-3 text-ground shadow-[var(--shadow-raise)]')}
+            className={cx('pointer-events-auto flex max-w-md animate-pop items-start gap-3 rounded-[var(--radius-card)] bg-ink px-4 py-3 text-ground shadow-[var(--shadow-float)]')}
           >
             {t.tone === 'ok' ? <CheckCircle2 aria-hidden className="mt-0.5 size-5 shrink-0 text-ok-soft" /> : t.tone === 'alert' ? <OctagonAlert aria-hidden className="mt-0.5 size-5 shrink-0 text-alert-soft" /> : <Info aria-hidden className="mt-0.5 size-5 shrink-0 text-accent-soft" />}
             <p className="flex-1 text-[0.95rem]">{t.message}</p>

@@ -2,10 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { EXERCISES } from '@/features/exercises/library';
 import { MovementEngine } from '@/features/movement-analysis/engine';
-import { evaluateFrame } from '@/features/movement-analysis/quality';
-import { SIMULATED_PROVIDER_INFO, SYNTHETIC_FRAME, buildSyntheticPose, generateFrames, seededRandom, type RepScript } from '@/features/pose-estimation/synthetic';
-import { median, standardDeviation } from '@/features/movement-analysis/filters';
+import { evaluateFrame, transformAngle } from '@/features/movement-analysis/quality';
+import { frameView, imageAngle } from '@/features/movement-analysis/measure';
+import { CHECK_TEXT } from '@/features/movement-analysis/formChecks';
+import { ANALYSIS_CONFIG } from '@/features/movement-analysis/config';
+import {
+  CHECK_FAULT_REP,
+  SIMULATED_PROVIDER_INFO,
+  SYNTHETIC_FRAME,
+  buildSyntheticBody,
+  buildSyntheticPose,
+  generateFrames,
+  scriptedValue,
+  seededRandom,
+  standardScript,
+  type RepScript,
+} from '@/features/pose-estimation/synthetic';
+import { OneEuroFilter, TimeConstantSmoother, median, standardDeviation } from '@/features/movement-analysis/filters';
 import type { ExerciseDefinition } from '@/types/exercise';
+import type { FormCheckId } from '@/types/form';
+import type { PoseFrame } from '@/types/pose';
 
 /**
  * Quantitative evaluation harness. Everything here runs on SYNTHETIC skeletons
@@ -29,6 +45,22 @@ function scriptFor(def: ExerciseDefinition, rand: () => number, n: number, opts:
     holdMs: rand() < 0.5 ? 0 : 500 + rand() * 3000,
     returnMs: 800 + rand() * 2500,
   }));
+}
+
+/** The same frame seen by a camera rolled by `deg` (image and world rotate together about the view axis). */
+function rollFrame(f: PoseFrame, deg: number): PoseFrame {
+  const r = (deg * Math.PI) / 180;
+  const [c, s] = [Math.cos(r), Math.sin(r)];
+  const { width: W, height: H } = SYNTHETIC_FRAME;
+  return {
+    ...f,
+    landmarks: f.landmarks?.map((l) => {
+      const x = (l.x - 0.5) * W;
+      const y = (l.y - 0.5) * H;
+      return { ...l, x: (x * c - y * s) / W + 0.5, y: (x * s + y * c) / H + 0.5 };
+    }) ?? null,
+    world: f.world?.map((w) => ({ ...w, x: w.x * c - w.y * s, y: w.x * s + w.y * c })) ?? null,
+  };
 }
 
 function run(def: ExerciseDefinition, frames: ReturnType<typeof generateFrames>) {
@@ -77,8 +109,101 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
     out('With no noise the geometry is exact (error < 0.01°). Error grows with landmark jitter; real pose-model jitter on real footage has not been measured against a reference, so these numbers bound only the software, not the camera system.');
     out();
 
-    // 2. Repetition counting.
-    out('## 2. Repetition counting');
+    // 2. Rotation robustness: the previous image-only method vs the current blended method.
+    out('## 2. Body turned away from the camera');
+    out();
+    out('People rarely stand exactly square to a laptop camera. Each cell turns the synthetic person by the given yaw about the vertical axis and measures 300 random poses per exercise with realistic noise: 2 px image jitter, 1.5 cm world-landmark jitter across the image and 3 cm in depth (the model\'s depth is its least certain axis). "Image only (previous)" is the angle measured in the camera image on the definition\'s three landmarks, which is what earlier builds did; for the arm raise that meant the hip on the same side as the reference. "Current" is what the app measures now: for the arm raise the trunk midline in the image, blended into a 3D trunk-fixed frame as the body turns (10°→30° yaw); for the other exercises the image angle, blended toward a hybrid (image x/y plus world depth) as the limb\'s plane turns away from the camera (15°→35°). Cells show mean absolute error · bias (signed mean).');
+    out();
+    out('| Exercise | Method | 0° | 15° | 30° | 45° | 60° |');
+    out('|---|---|---|---|---|---|---|');
+    for (const def of Object.values(EXERCISES)) {
+      const prev: string[] = [];
+      const cur: string[] = [];
+      const methods: string[] = [];
+      const rr = seededRandom(31000);
+      for (const yaw of [0, 15, 30, 45, 60]) {
+        const ePrev: number[] = [];
+        const eCur: number[] = [];
+        let blended = 0;
+        for (let i = 0; i < 300; i++) {
+          const truth = def.demo.neutral + (def.demo.peak - def.demo.neutral) * (0.15 + 0.85 * rr());
+          const body = buildSyntheticBody(def, 'right', truth, { noisePx: 2, worldNoiseM: 0.015, worldDepthNoiseM: 0.03, yawDeg: yaw, random: rr });
+          const frame = { timestamp: i, landmarks: body.landmarks, world: body.world, imageWidth: SYNTHETIC_FRAME.width, imageHeight: SYNTHETIC_FRAME.height, provider: SIMULATED_PROVIDER_INFO, status: 'ok' as const };
+          const { a, b, c } = def.metric.landmarks.right;
+          const img = imageAngle(frameView(body.landmarks, null, SYNTHETIC_FRAME.width, SYNTHETIC_FRAME.height), a, b, c);
+          const s = evaluateFrame(frame, def, 'right');
+          if (img === null || s.value === null) continue;
+          ePrev.push(transformAngle(def, img) - truth);
+          eCur.push(s.value - truth);
+          if (s.method !== '2d') blended++;
+        }
+        const cell = (e: number[]) => `${r1(e.reduce((x, y) => x + Math.abs(y), 0) / e.length)}° · ${r1(e.reduce((x, y) => x + y, 0) / e.length)}°`;
+        prev.push(cell(ePrev));
+        cur.push(cell(eCur));
+        methods.push(`${Math.round((blended / Math.max(1, eCur.length)) * 100)}%`);
+        if (yaw >= 45) expect(eCur.reduce((x, y) => x + Math.abs(y), 0) / eCur.length).toBeLessThan(ePrev.reduce((x, y) => x + Math.abs(y), 0) / ePrev.length);
+      }
+      out(`| ${def.name} | Image only (previous) | ${prev.join(' | ')} |`);
+      out(`| | Current | ${cur.join(' | ')} |`);
+      out(`| | Frames using 3D | ${methods.join(' | ')} |`);
+    }
+    out();
+    out('Facing the camera, the previous arm-raise reference (the hip on the same side, which sits about 10 cm inboard of the shoulder on this skeleton) reads about 11° high on every repetition; the trunk midline removes that bias. When the body turns, the 3D estimate keeps the error roughly level while the image angle grows. For the side-view exercises the image angle is already exact when the limb faces the camera, so the blend only engages as the limb turns. Beyond about 45° the side-view exercises also fail the camera-view check, so those frames are marked uncertain and never count toward progress. Real MediaPipe world landmarks may be noisier than modelled here; that has not been measured.');
+    out();
+
+    // 3. Smoothing filter.
+    out('## 3. Smoothing filter');
+    out();
+    out('The joint angle is smoothed with a One Euro filter (cutoff rises with speed). 8 sessions × 4 arm raises peaking at 84–96°, 2 px noise. "Peak error" is the smoothed peak minus the true peak (positive = overshoot from noise); "rest jitter" is the standard deviation of the smoothed value at rest; "lag" is the mean error mid-rise (true 50–70°).');
+    out();
+    out('| Filter | fps | Peak error (mean / MAE) | Rest jitter (SD) | Lag mid-rise |');
+    out('|---|---|---|---|---|');
+    {
+      const def = EXERCISES['shoulder-abduction'];
+      const filters: Array<[string, () => { next(t: number, v: number): number }]> = [
+        ['Exponential, τ = 70 ms (previous)', () => new TimeConstantSmoother()],
+        ['One Euro, 1.0 Hz, β 0.03', () => new OneEuroFilter(1.0, 0.03, 1)],
+        [`One Euro, ${ANALYSIS_CONFIG.oneEuro.minCutoffHz} Hz, β ${ANALYSIS_CONFIG.oneEuro.beta} (current)`, () => new OneEuroFilter()],
+      ];
+      for (const fps of [30, 15]) {
+        for (const [label, make] of filters) {
+          const peak: number[] = [];
+          const rest: number[] = [];
+          const lag: number[] = [];
+          for (let k = 0; k < 8; k++) {
+            const script = standardScript(4, 90, { seed: k, variation: 6, holdMs: 200 });
+            const frames = generateFrames(def, 'right', 15, script, { noisePx: 2, random: seededRandom(100 + k), fps });
+            const f = make();
+            const restErr: number[] = [];
+            let cur: { s: number; tr: number } | null = null;
+            for (const fr of frames) {
+              const s = evaluateFrame(fr, def, 'right');
+              if (s.value === null) continue;
+              const v = f.next(fr.timestamp, s.value);
+              const tr = scriptedValue(15, script, fr.timestamp - 1000);
+              if (tr < 16 && fr.timestamp > 1300) restErr.push(v - tr);
+              if (tr > 50 && tr < 70) lag.push(Math.abs(tr - v));
+              if (tr > 40) {
+                cur ??= { s: -Infinity, tr: -Infinity };
+                cur.s = Math.max(cur.s, v);
+                cur.tr = Math.max(cur.tr, tr);
+              } else if (cur) {
+                peak.push(cur.s - cur.tr);
+                cur = null;
+              }
+            }
+            rest.push(standardDeviation(restErr) ?? 0);
+          }
+          const mean = (x: number[]) => x.reduce((a, b) => a + b, 0) / Math.max(1, x.length);
+          out(`| ${label} | ${fps} | ${r1(mean(peak))}° / ${r1(mean(peak.map(Math.abs)))}° | ${r1(mean(rest))}° | ${r1(mean(lag))}° |`);
+        }
+      }
+    }
+    out();
+    out('Parameters were chosen on this table (a sweep of 0.5–1.5 Hz and β 0.01–0.08): the current setting roughly halves the lag of the previous filter with slightly less jitter at rest and no worse peak error. The AR overlay uses a separate One Euro landmark smoother for drawing only; measurements never use smoothed landmarks.');
+    out();
+    // 4. Repetition counting.
+    out('## 4. Repetition counting');
     out();
     out('20 simulated sessions per exercise, 8 repetitions each, with random peak heights (all above the counting threshold), random speeds (0.7–2.5 s out, 0.8–2.5 s back), random holds (0–3.5 s), 2 px landmark noise, 30 fps.');
     out();
@@ -115,8 +240,8 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
     out(`Overall: ${totalCounted} of ${totalTrue} scripted repetitions counted (${r1((totalCounted / totalTrue) * 100)}%), ${totalExtra} extra.`);
     out();
 
-    // 3. Movements that should NOT count.
-    out('## 3. Movements that must not be counted');
+    // 5. Movements that should NOT count.
+    out('## 5. Movements that must not be counted');
     out();
     out('| Scenario | Movements | Counted (should be 0) | Recorded as not counted |');
     out('|---|---|---|---|');
@@ -173,8 +298,8 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
     }
     out();
 
-    // 4. Robustness: occlusion and dropouts.
-    out('## 4. Occlusion, dropped frames and camera interruptions');
+    // 6. Robustness: occlusion and dropouts.
+    out('## 6. Occlusion, dropped frames and camera interruptions');
     out();
     out('Arm raise, 8 repetitions per session, 10 sessions per row.');
     out();
@@ -188,7 +313,7 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
       { label: '5% of frames with no person detected', opts: (rr) => ({ noisePx: 2, random: rr, dropFrame: () => rr() < 0.05 }) },
       { label: '20% of frames with no person detected', opts: (rr) => ({ noisePx: 2, random: rr, dropFrame: () => rr() < 0.2 }) },
       { label: '1-second camera freeze once per session', opts: (rr) => ({ noisePx: 2, random: rr, dropFrame: (t) => t > 9000 && t < 10000 }) },
-      { label: 'Body turned side-on, so the view check fails', opts: (rr) => ({ noisePx: 2, random: rr }) },
+      { label: 'Body turned 80° (side-on), so the view check fails', opts: (rr) => ({ noisePx: 2, random: rr, yawDeg: 80 }) },
     ];
     for (const c of conditions) {
       let trueN = 0;
@@ -199,16 +324,7 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
       for (let k = 0; k < 10; k++) {
         const rr = seededRandom(9000 + k);
         const script = scriptFor(def, rr, 8);
-        let frames = generateFrames(def, 'right', def.demo.neutral, script, c.opts(rr));
-        if (c.label.startsWith('Body turned')) {
-          // Re-use the side-view (knee) skeleton's shoulders/hips so the view check sees a side-on body.
-          frames = frames.map((f) => {
-            if (!f.landmarks) return f;
-            const side = buildSyntheticPose(EXERCISES['knee-extension'], 'right', 100);
-            const lms = f.landmarks.map((l, i) => (i === 11 || i === 23 ? (side[i] ?? l) : l));
-            return { ...f, landmarks: lms };
-          });
-        }
+        const frames = generateFrames(def, 'right', def.demo.neutral, script, c.opts(rr));
         const engine = run(def, frames);
         trueN += script.length;
         counted += engine.reps.length;
@@ -222,8 +338,74 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
     out('Missing or hidden landmarks abort the affected repetition instead of guessing it; partial visibility keeps counting but excludes the measurements. A mismatched camera view marks frames uncertain, so those repetitions are excluded from measurements.');
     out();
 
-    // 5. Software repeatability.
-    out('## 5. Repeatability under simulated noise');
+    // 7. Form checks: detection on scripted faults, false alarms on clean repetitions.
+    out('## 7. Form-check detection');
+    out();
+    out('For every check of every exercise, 6 simulated sessions alternate clean repetitions with repetitions showing that check\'s fault (the same faults the simulated demo uses, e.g. a 45° elbow bend, a 16° sideways lean, a 0.38 s lowering). Noise: 2 px image, 1 cm world. A repetition is "detected" when its stored result for that check is fail; a "false alarm" is a fail on a clean repetition. "Tilted camera" repeats the clean repetitions with the whole image rolled 8°, which posture checks must ignore because they compare with the start of each repetition. The last column turns the person 25° and raises the noise to 3 px and 1.5 cm (3 cm depth); repetitions whose tracking is uncertain (for example a forward lean that makes a turned body look front-on to the view check) get no form judgement at all, by design. Thresholds are demonstration parameters, not clinical ones.');
+    out();
+    out('| Exercise | Check | Detected | False alarms | Tilted camera: false alarms | Turned 25°, heavier noise: detected · false alarms |');
+    out('|---|---|---|---|---|---|');
+    let tpAll = 0;
+    let faultAll = 0;
+    let fpAll = 0;
+    let cleanAll = 0;
+    const checkConditions = [
+      { key: 'base', roll: 0, yaw: 0, noisePx: 2, worldNoiseM: 0.01, sessions: 6 },
+      { key: 'tilt', roll: 8, yaw: 0, noisePx: 2, worldNoiseM: 0.01, sessions: 3 },
+      { key: 'hard', roll: 0, yaw: 25, noisePx: 3, worldNoiseM: 0.015, sessions: 3 },
+    ] as const;
+    type Tally = { tp: number; nFault: number; fp: number; nClean: number; unjudged: number };
+    for (const def of Object.values(EXERCISES)) {
+      const holdMs = def.demoPrescription.holdSeconds * 1000;
+      for (const id of Object.keys(def.formChecks) as FormCheckId[]) {
+        const fault = CHECK_FAULT_REP[id](def, holdMs);
+        if (!fault) continue;
+        const tally: Record<'base' | 'tilt' | 'hard', Tally> = { base: { tp: 0, nFault: 0, fp: 0, nClean: 0, unjudged: 0 }, tilt: { tp: 0, nFault: 0, fp: 0, nClean: 0, unjudged: 0 }, hard: { tp: 0, nFault: 0, fp: 0, nClean: 0, unjudged: 0 } };
+        for (const cond of checkConditions) {
+          const n = tally[cond.key];
+          for (let k = 0; k < cond.sessions; k++) {
+            const rr = seededRandom(41000 + k);
+            const base = (): RepScript => ({ peak: def.demo.peak + (rr() - 0.5) * 8, restMs: 1200 + rr() * 400, outboundMs: 1300 + rr() * 400, holdMs: Math.max(250, holdMs), returnMs: 1400 + rr() * 400 });
+            const kinds = ['clean', 'fault', 'clean', 'fault'] as const;
+            const script = kinds.map((kind) => (kind === 'fault' ? { ...base(), ...fault } : base()));
+            let frames = generateFrames(def, 'right', def.demo.neutral, script, { noisePx: cond.noisePx, worldNoiseM: cond.worldNoiseM, yawDeg: cond.yaw, random: seededRandom(42000 + k) });
+            if (cond.roll) frames = frames.map((f) => rollFrame(f, cond.roll));
+            const engine = new MovementEngine({ def, side: 'right', target: def.demoPrescription.target, sessionStart: 0, holdSeconds: def.demoPrescription.holdSeconds });
+            frames.forEach((f) => engine.process(f));
+            if (engine.reps.length !== kinds.length) {
+              // Every scripted repetition here is countable; a miscount is reported as missed faults.
+              n.nFault += 2;
+              continue;
+            }
+            engine.reps.forEach((rep, i) => {
+              const result = rep.checks.find((c) => c.id === id)?.result;
+              const failed = result === 'fail';
+              if (kinds[i] === 'fault') {
+                n.nFault++;
+                if (failed) n.tp++;
+                if (result === 'unknown') n.unjudged++;
+              } else {
+                n.nClean++;
+                if (failed) n.fp++;
+              }
+            });
+          }
+        }
+        const { base, tilt, hard } = tally;
+        tpAll += base.tp;
+        faultAll += base.nFault;
+        fpAll += base.fp + tilt.fp;
+        cleanAll += base.nClean + tilt.nClean;
+        out(`| ${def.shortName} | ${CHECK_TEXT[id].label} | ${base.tp} / ${base.nFault} | ${base.fp} / ${base.nClean} | ${tilt.fp} / ${tilt.nClean} | ${hard.tp} / ${hard.nFault}${hard.unjudged ? ` (${hard.unjudged} not judged: tracking uncertain)` : ''} · ${hard.fp} / ${hard.nClean} |`);
+      }
+    }
+    out();
+    out(`Overall (first three columns): ${tpAll} of ${faultAll} faulty repetitions detected (${r1((tpAll / faultAll) * 100)}%), ${fpAll} false alarm${fpAll === 1 ? '' : 's'} on ${cleanAll} clean repetitions (${r1((fpAll / cleanAll) * 100)}%). Detection here only shows that each rule does what it says on synthetic people with known faults; whether the rules and thresholds match what a clinician would correct has not been evaluated.`);
+    out();
+    expect(tpAll / faultAll).toBeGreaterThan(0.9);
+    expect(fpAll / cleanAll).toBeLessThan(0.05);
+    // 8. Software repeatability.
+    out('## 8. Repeatability under simulated noise');
     out();
     out('The same scripted movement (8 repetitions peaking at exactly 90°) was "recorded" 30 times with different random 3 px landmark noise. This is the variation the software alone adds; real camera sessions vary much more (placement, distance, clothing, lighting, the person).');
     out();
@@ -240,8 +422,8 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
     out('Because real-camera repeatability has not been measured, PocketRehab does not set a minimal detectable change (`MEASUREMENT_ERROR_MODEL = null`) and never calls a change "improvement".');
     out();
 
-    // 6. Real footage run, when available.
-    out('## 6. Real footage (MediaPipe on a real person)');
+    // 9. Real footage run, when available.
+    out('## 9. Real footage (MediaPipe on a real person)');
     out();
     const real = 'docs/evaluation/real-video-run.json';
     if (existsSync(real)) {
@@ -267,7 +449,7 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
     }
     out();
 
-    out('## 7. Not yet evaluated');
+    out('## 10. Not yet evaluated');
     out();
     out('- Joint-angle accuracy of the camera system against a goniometer or motion-capture reference.');
     out('- Performance across camera angles, distances, lighting, clothing, body types and skin tones on real people.');
@@ -278,5 +460,5 @@ describe('PocketRehab evaluation (synthetic ground truth)', () => {
 
     mkdirSync('docs', { recursive: true });
     writeFileSync('docs/EVALUATION.md', lines.join('\n') + '\n');
-  });
+  }, 300_000);
 });

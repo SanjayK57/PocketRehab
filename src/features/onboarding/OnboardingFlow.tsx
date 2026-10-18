@@ -11,7 +11,7 @@ import { ExercisePicker, PrescriptionCard, newPrescription, validatePrescription
 import { ScheduleFields } from '@/features/scheduling/ScheduleFields';
 import { PreferenceFields } from '@/features/settings/PreferenceFields';
 import { CameraTest } from '@/features/live-coaching/CameraTest';
-import { createDemoProfile } from './demoProfile';
+import { exploreDemo } from '@/features/accounts/demo';
 import { BrandMark } from '@/components/BrandMark';
 import { SkipLink } from '@/components/SkipLink';
 import { Button, CheckboxRow, ChoiceGroup, Field, KeyValue, Notice, Scale, TextArea, TextInput, cx } from '@/components/ui';
@@ -152,8 +152,8 @@ export function OnboardingFlow() {
   const startDemo = async () => {
     setDemoBusy(true);
     try {
-      await createDemoProfile();
-      await deleteMeta(DRAFT_KEY).catch(() => undefined);
+      // The demo is its own account; this account's unfinished setup stays saved for later.
+      await exploreDemo();
       navigate('/', { replace: true });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -207,7 +207,7 @@ export function OnboardingFlow() {
             </div>
             <div className="border-t border-rule pt-6">
               <h2 className="font-bold">Just looking around?</h2>
-              <p className="mt-1 max-w-[60ch] text-ink-2">Open a demo profile filled with simulated sample sessions. It is clearly labelled and can be removed with one click.</p>
+              <p className="mt-1 max-w-[60ch] text-ink-2">Open a separate demo account filled with simulated sample sessions. It is clearly labelled, and what you’ve entered here stays saved for later.</p>
               <Button variant="secondary" className="mt-3" onClick={startDemo} loading={demoBusy}>
                 Explore the demo profile
               </Button>

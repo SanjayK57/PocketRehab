@@ -16,6 +16,8 @@ export const ANALYSIS_CONFIG = {
   jumpCheckMaxDtMs: 250,
   /** Time constant of the exponential smoothing filter. Frame-rate independent. */
   smoothingTauMs: 70,
+  /** One Euro filter on the joint angle: cutoff = minCutoffHz + beta × |speed in °/s|. Tuned on synthetic sessions (see docs/EVALUATION.md). */
+  oneEuro: { minCutoffHz: 0.5, beta: 0.03, dCutoffHz: 1.0 },
   /** Filter state is reset after a gap this long. */
   smoothingResetMs: 400,
   /** Window used for the live tracking-quality indicator. */

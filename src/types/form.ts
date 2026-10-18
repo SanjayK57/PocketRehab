@@ -31,9 +31,21 @@ export type FormCheckId =
   | 'steady-pace'
   | 'within-target';
 
+/**
+ * - `unknown`: not judged right now (tracking not reliable, the check's own
+ *   landmarks not reliable, or a per-repetition check not decided yet for this repetition).
+ * - `ok`: judged and fine.
+ * - `warn`: the rule is broken. Posture checks get here only after the rule has
+ *   been broken for 350 ms and leave only after it has been clearly fine for
+ *   350 ms; per-repetition checks keep their result until the next repetition starts.
+ */
 export type CheckState = 'ok' | 'warn' | 'unknown';
 
-/** How the joint angle was measured on this frame. */
+/**
+ * How the joint angle was measured on this frame: the camera image only
+ * ('2d'), a blend of the image and the model's 3D world landmarks ('hybrid'),
+ * or a trunk-fixed 3D frame ('3d-body-frame', arm raise with the body turned).
+ */
 export type MeasurementMethod = '3d-body-frame' | 'hybrid' | '2d' | 'none';
 
 export interface LiveCheck {
@@ -55,11 +67,16 @@ export interface LiveCheck {
   sinceMs: number;
 }
 
+/**
+ * One check's result for a finished repetition. `fail` when the check warned
+ * during the repetition (or its per-repetition rule failed); `unknown` when it
+ * could not be judged, and always `unknown` on a repetition whose tracking was uncertain.
+ */
 export interface RepCheck {
   id: FormCheckId;
   label: string;
   result: 'pass' | 'fail' | 'unknown';
-  /** Worst value seen during the repetition, when measurable. */
+  /** Worst value seen during the repetition (posture checks) or the judged value (timing: seconds; target: peak °). */
   value: number | null;
   unit: '°' | 's' | '%' | null;
 }
