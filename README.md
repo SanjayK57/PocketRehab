@@ -24,7 +24,7 @@ PocketRehab installs straight from the website. Once installed it has its own ic
 1. **Make an account.** Tap **Continue with Google** to keep a backup in your own Google Drive and use it on any device, or create a private account (name, email, password) that stays encrypted in this browser. Just looking? Tap **Explore the demo**.
 2. **Add your plan.** Enter the exercises, sets, reps, holds and target angles your therapist gave you, or start from the exercise library.
 3. **Start a session.** Set your phone or laptop 2–3 m (7–10 ft) away, follow the on-screen camera checklist, and move. The coach counts out loud, tells you when to hold or slow down, and points out form problems like a bent elbow or a leaning body.
-4. **See your progress.** After each set you get a per-repetition report card. The Progress tab shows your range of motion over time, and **Report** makes a PDF for your next appointment.
+4. **See your progress.** After every repetition it shows which form checks passed and what to work on. The Progress tab shows your range of motion over time, and **Report** makes a PDF for your next appointment.
 
 No camera? Every exercise has a simulated demo and a manual log.
 
