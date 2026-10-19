@@ -10,6 +10,7 @@ export async function createAccount(page: Page, opts: { name?: string; password?
   if (!(await heading.isVisible())) await page.goto('/');
   await expect(heading).toBeVisible();
   await page.getByLabel('Account name').fill(opts.name ?? 'Jordan');
+  await page.getByLabel('Email', { exact: true }).fill(`${(opts.name ?? 'Jordan').toLowerCase().replace(/[^a-z0-9]+/g, '.')}@example.com`);
   await page.getByLabel('Password', { exact: true }).fill(opts.password ?? PASSWORD);
   await page.getByLabel('Type it again').fill(opts.password ?? PASSWORD);
   await page.getByLabel(/I understand that if I forget this password/).check();

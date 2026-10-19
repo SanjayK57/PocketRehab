@@ -205,7 +205,7 @@ export function AccountScreen() {
               <AccountTab account={a} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-headline">{a.name}</span>
-                <span className="block text-callout text-ink-2">{a.kind === 'guest' ? 'Sample data · no password' : a.kind === 'google' ? `Google · ${a.email ?? ''}` : `Last opened ${relativeDay(a.lastUsedAt)}`}</span>
+                <span className="block text-callout text-ink-2">{a.kind === 'guest' ? 'Sample data · no password' : a.kind === 'google' ? `Google · ${a.email ?? ''}` : `${a.email ? `${a.email} · ` : ''}last opened ${relativeDay(a.lastUsedAt)}`}</span>
               </span>
               <ChevronRight aria-hidden className="size-5 text-ink-3 transition-transform duration-200 ease-[var(--ease-out)] group-hover:translate-x-0.5" />
             </button>
@@ -399,10 +399,11 @@ function UnlockForm({ account, onSwitch }: { account: Account; onSwitch: () => v
 function CreateForm({ restore }: { restore?: { bundle: unknown; from: string } }) {
   const id = useId();
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [understood, setUnderstood] = useState(false);
-  const [errors, setErrors] = useState<Partial<Record<'name' | 'password' | 'confirm' | 'understood' | 'form', string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<'name' | 'email' | 'password' | 'confirm' | 'understood' | 'form', string>>>({});
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
 
   const submit = async (e: FormEvent) => {
@@ -410,6 +411,7 @@ function CreateForm({ restore }: { restore?: { bundle: unknown; from: string } }
     if (phase === 'running') return;
     const next: typeof errors = {};
     if (!name.trim()) next.name = 'Enter a name for this account.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) next.email = 'Enter an email address, like name@example.com.';
     const problem = passwordProblem(password);
     if (problem) next.password = problem;
     else if (confirm !== password) next.confirm = 'The two passwords don’t match.';
@@ -421,18 +423,21 @@ function CreateForm({ restore }: { restore?: { bundle: unknown; from: string } }
     }
     setPhase('running');
     try {
-      await createAccount(name, password, restore ? () => importAllData(restore.bundle) : undefined);
+      await createAccount(name, password, restore ? () => importAllData(restore.bundle) : undefined, email);
       setPhase('done');
     } catch (err) {
       setPhase('idle');
-      setErrors(err instanceof AccountError && /already an account|name/i.test(err.message) ? { name: err.message } : { form: errorText(err) });
+      setErrors(err instanceof AccountError && /email/i.test(err.message) ? { email: err.message } : err instanceof AccountError && /already an account|name/i.test(err.message) ? { name: err.message } : { form: errorText(err) });
     }
   };
 
   return (
     <form onSubmit={submit} className="space-y-6" noValidate>
       <Field label="Account name" htmlFor={`${id}-name`} help="Shown on this device’s sign-in screen, so it isn’t encrypted. A first name is enough." error={errors.name}>
-        <TextInput id={`${id}-name`} autoComplete="username" maxLength={40} value={name} onChange={(e) => setName(e.target.value)} aria-invalid={errors.name ? true : undefined} aria-describedby={`${id}-name-help`} />
+        <TextInput id={`${id}-name`} autoComplete="name" maxLength={40} value={name} onChange={(e) => setName(e.target.value)} aria-invalid={errors.name ? true : undefined} aria-describedby={`${id}-name-help`} />
+      </Field>
+      <Field label="Email" htmlFor={`${id}-email`} help="Identifies your account on this device and matches it if you later sign in with Google. PocketRehab has no server, so it never emails you and can’t reset a password." error={errors.email}>
+        <TextInput id={`${id}-email`} type="email" inputMode="email" autoComplete="username email" maxLength={120} value={email} onChange={(e) => setEmail(e.target.value)} aria-invalid={errors.email ? true : undefined} aria-describedby={`${id}-email-help`} />
       </Field>
       <Field label="Password" htmlFor={`${id}-password`} help={`At least ${PASSWORD_MIN} characters. A short sentence is easy to remember and hard to guess.`} error={errors.password}>
         <PasswordInput id={`${id}-password`} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={errors.password ? true : undefined} aria-describedby={`${id}-password-help ${id}-strength`} />

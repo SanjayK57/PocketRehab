@@ -21,7 +21,7 @@ export interface Account {
   name: string;
   /** 'guest' is the password-less demo account with sample data; 'google' opens with a Google sign-in. */
   kind: 'password' | 'guest' | 'google';
-  /** Google accounts only: the signed-in address (shown in Settings). */
+  /** The account's email (Google address for Google accounts). Stored unencrypted, like the name, so the sign-in screen can show it. */
   email?: string;
   createdAt: number;
   lastUsedAt: number;
@@ -277,8 +277,11 @@ async function release(): Promise<void> {
  * Creates a password account and opens it. `prepare` runs with the new key active
  * but before any screen shows the account (restoring a backup into it).
  */
-export async function createAccount(name: string, password: string, prepare?: () => Promise<void>): Promise<{ migrated: boolean; migrationError: string | null }> {
-  const n = cleanName(name, await listAccounts());
+export async function createAccount(name: string, password: string, prepare?: () => Promise<void>, email?: string): Promise<{ migrated: boolean; migrationError: string | null }> {
+  const others = await listAccounts();
+  const mail = email?.trim().toLowerCase() || undefined;
+  if (mail && others.some((a) => a.email?.toLowerCase() === mail)) throw new AccountError('invalid', 'There’s already an account with this email on this device. Pick it from the list to sign in.');
+  const n = cleanName(name, others);
   const problem = passwordProblem(password);
   if (problem) throw new AccountError('invalid', problem);
   await release();
@@ -289,7 +292,7 @@ export async function createAccount(name: string, password: string, prepare?: ()
   const wrapped = await wrapDataKey(await generateDataKey(), kek, aad(id, 'data-key'));
   // Work with a non-extractable copy; the extractable original is garbage from here on.
   const key = await unwrapDataKey(wrapped, kek, aad(id, 'data-key'));
-  const rec: AccountRecord = { id, name: n, kind: 'password', createdAt: now, lastUsedAt: now, autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, kdf: { iterations: KDF_ITERATIONS, salt }, wrapped, deviceKey: null, failedAttempts: 0, lastFailedAt: null };
+  const rec: AccountRecord = { id, name: n, email: mail, kind: 'password', createdAt: now, lastUsedAt: now, autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, kdf: { iterations: KDF_ITERATIONS, salt }, wrapped, deviceKey: null, failedAttempts: 0, lastFailedAt: null };
   await putRecord(rec);
   setUnlocked({ accountId: id, key });
   let migrated = false;
