@@ -25,6 +25,7 @@ import { SkipLink } from '@/components/SkipLink';
 import { CheckboxRow, Field, LoadingBlock, Notice, TextInput, cx } from '@/components/ui';
 import { AccountTab, PasswordInput, SealButton, StrengthMeter, errorText, formatWait, relativeDay, useAccountState, useCountdown } from './accountUi';
 import { exploreDemo } from './demo';
+import { InstallButton } from '@/features/install/InstallButton';
 import { connectGoogle, downloadBackup, findBackup, googleConfigured, preloadGoogle } from './google';
 
 type View = { kind: 'list' } | { kind: 'unlock'; account: Account } | { kind: 'create'; restore?: { bundle: unknown; from: string } } | { kind: 'restore' };
@@ -235,7 +236,8 @@ function Frame({ title, intro, children, back, notice }: { title: string; intro?
       <div className="mx-auto grid min-h-dvh max-w-6xl content-start gap-x-16 px-4 sm:px-8 lg:grid-cols-[minmax(0,30rem)_minmax(0,1fr)] lg:px-12">
         <header className="flex items-center gap-2.5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-10 lg:col-span-2 lg:pb-16 lg:pt-10">
           <BrandMark className="h-6 w-8" />
-          <span className="text-lg font-bold tracking-[-0.02em]">PocketRehab</span>
+          <span className="flex-1 text-lg font-bold tracking-[-0.02em]">PocketRehab</span>
+          <InstallButton />
         </header>
         <main id="account-main" tabIndex={-1} className="pb-12 outline-none" key={title}>
           {back ? (

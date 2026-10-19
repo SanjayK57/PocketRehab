@@ -15,6 +15,7 @@ import { listSessions } from '@/lib/storage/repositories';
 import { dateKey, formatTime, todayKey } from '@/lib/time/dates';
 import { countsTowardAdherence } from '@/features/scheduling/schedule';
 import { AccountMenu } from '@/features/accounts/AccountMenu';
+import { InstallButton } from '@/features/install/InstallButton';
 
 const NAV: Array<{ to: string; label: string; short?: string; icon: LucideIcon; end: boolean }> = [
   { to: '/', label: 'Home', icon: House, end: true },
@@ -74,6 +75,7 @@ export function AppShell() {
           </ul>
         </nav>
         <div className="px-3 pb-3 text-rail-ink">
+          <InstallButton tone="rail" className="mb-3 w-full justify-center" />
           <AccountMenu />
         </div>
         <p className="mx-4 mb-6 flex gap-2.5 border-t border-rail-3 px-1 pt-4 text-[0.8125rem] leading-snug text-rail-ink-2">
@@ -86,6 +88,7 @@ export function AppShell() {
         <header className="no-print sticky top-0 z-30 flex items-center gap-2.5 border-b border-rule/80 bg-ground/90 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 backdrop-blur-md lg:hidden">
           <BrandMark className="h-5 w-7" />
           <span className="flex-1 text-lg font-bold tracking-[-0.02em]">PocketRehab</span>
+          <InstallButton className="min-h-9 px-3" />
           <AccountMenu compact />
         </header>
 

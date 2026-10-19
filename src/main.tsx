@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import { App } from './app/App';
 import './index.css';
+import './features/install/install';
 
 // After a new version is deployed, a tab still running the old one can fail to load a lazily loaded
 // screen (its file name changed). Reload once to pick up the new version instead of showing an error.
