@@ -88,6 +88,7 @@ export interface GoogleSession {
   token: string;
   expiresAt: number;
   email: string | null;
+  name: string | null;
 }
 
 let session: GoogleSession | null = null;
@@ -115,12 +116,13 @@ export async function connectGoogle(): Promise<GoogleSession> {
     client.requestAccessToken({ prompt: session ? '' : 'select_account' });
   });
   if (!token.access_token) throw new GoogleError('auth', 'Google didn’t return access.');
-  const next: GoogleSession = { token: token.access_token, expiresAt: Date.now() + (token.expires_in ?? 3600) * 1000, email: null };
+  const next: GoogleSession = { token: token.access_token, expiresAt: Date.now() + (token.expires_in ?? 3600) * 1000, email: null, name: null };
   try {
-    const about = (await api(next, '/drive/v3/about?fields=user(emailAddress)')) as { user?: { emailAddress?: unknown } };
+    const about = (await api(next, '/drive/v3/about?fields=user(emailAddress,displayName)')) as { user?: { emailAddress?: unknown; displayName?: unknown } };
     next.email = typeof about.user?.emailAddress === 'string' ? about.user.emailAddress : null;
+    next.name = typeof about.user?.displayName === 'string' ? about.user.displayName : null;
   } catch {
-    // The address is only shown for reassurance; backup works without it.
+    // Sign-in with Google needs the address; callers report it when missing.
   }
   session = next;
   return next;

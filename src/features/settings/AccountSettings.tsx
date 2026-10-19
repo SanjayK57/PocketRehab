@@ -25,7 +25,38 @@ import { connectGoogle, currentGoogleSession, disconnectGoogle, downloadBackup, 
 export function AccountSection() {
   const { account } = useAccountState();
   if (!account) return null;
+  if (account.kind === 'google') return <GoogleAccountSection account={account} />;
   return account.kind === 'guest' ? <DemoAccountSection /> : <PasswordAccountSection key={account.id} account={account} />;
+}
+
+function GoogleAccountSection({ account }: { account: Account }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <Section id="account" title="Account">
+      <p className="max-w-[60ch] text-ink-2">
+        Signed in with Google as <strong className="text-ink">{account.email}</strong>. A few seconds after each change, your data is backed up to a private app folder in your Google Drive, so signing in with Google on another device brings it back.
+      </p>
+      <div className="mt-5 flex flex-wrap gap-2">
+        <Button variant="secondary" icon={<LogOut aria-hidden className="size-4" />} onClick={() => void signOut()}>
+          Sign out
+        </Button>
+        <Button variant="quiet" icon={<Trash2 aria-hidden className="size-4" />} onClick={() => setConfirming(true)}>
+          Remove from this device
+        </Button>
+      </div>
+      <Dialog open={confirming} onClose={() => setConfirming(false)} title="Remove this account from this device?">
+        <p>Its data on this device is deleted. The backup in your Google Drive stays, so you can sign in with Google again later to restore it.</p>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <Button variant="danger" onClick={() => void deleteAccount(null)}>
+            Remove
+          </Button>
+          <Button variant="secondary" onClick={() => setConfirming(false)}>
+            Cancel
+          </Button>
+        </div>
+      </Dialog>
+    </Section>
+  );
 }
 
 function DemoAccountSection() {

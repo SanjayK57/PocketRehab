@@ -24,6 +24,7 @@ import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AboutPage } from '@/features/settings/AboutPage';
 import { AccountScreen } from '@/features/accounts/AccountScreen';
 import { useAccountState } from '@/features/accounts/accountUi';
+import { useGoogleAutoBackup } from '@/features/accounts/useGoogleAutoBackup';
 import { useAutoLock, useAutoLockHold } from '@/features/accounts/autoLock';
 import { forgetGoogle } from '@/features/accounts/google';
 import { MeasurementsPage } from '@/features/measurements/MeasurementsPage';
@@ -49,6 +50,7 @@ function KeepUnlocked({ children }: { children: ReactNode }) {
  */
 function AccountGate() {
   const { account } = useAccountState();
+  useGoogleAutoBackup(account);
   useAutoLock(account);
   useEffect(() => {
     if (!account) forgetGoogle();

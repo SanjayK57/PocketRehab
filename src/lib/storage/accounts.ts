@@ -19,8 +19,10 @@ export interface Account {
   id: string;
   /** Shown on this device's sign-in screen, so it is stored unencrypted (the user is told). */
   name: string;
-  /** 'guest' is the password-less demo account with sample data. */
-  kind: 'password' | 'guest';
+  /** 'guest' is the password-less demo account with sample data; 'google' opens with a Google sign-in. */
+  kind: 'password' | 'guest' | 'google';
+  /** Google accounts only: the signed-in address (shown in Settings). */
+  email?: string;
   createdAt: number;
   lastUsedAt: number;
   autoLockMinutes: number;
@@ -166,11 +168,11 @@ function isRecord(v: unknown): v is AccountRecord {
   const base = typeof r.id === 'string' && typeof r.name === 'string' && typeof r.createdAt === 'number' && typeof r.lastUsedAt === 'number' && typeof r.autoLockMinutes === 'number' && typeof r.failedAttempts === 'number';
   if (!base) return false;
   if (r.kind === 'password') return !!r.kdf && typeof r.kdf.iterations === 'number' && ArrayBuffer.isView(r.kdf.salt) && !!r.wrapped && ArrayBuffer.isView(r.wrapped.iv);
-  return r.kind === 'guest' && !!r.deviceKey;
+  return (r.kind === 'guest' || r.kind === 'google') && !!r.deviceKey;
 }
 
 function toAccount(r: AccountRecord): Account {
-  return { id: r.id, name: r.name, kind: r.kind, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, autoLockMinutes: r.autoLockMinutes };
+  return { id: r.id, name: r.name, kind: r.kind, email: r.email, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, autoLockMinutes: r.autoLockMinutes };
 }
 
 async function getRecord(id: string): Promise<AccountRecord | null> {
@@ -317,6 +319,35 @@ export async function unlockAccount(id: string, password: string): Promise<void>
   if (!rec) throw new AccountError('missing', 'That account is no longer on this device.');
   const key = await verify(rec, password, false);
   await release();
+  await activate(rec, key);
+}
+
+/**
+ * Opens the account tied to a Google sign-in, creating it on first use. The id
+ * comes from the address, so signing in again (or on another device) finds the
+ * same account. Its key stays on this device; the Drive backup carries the data
+ * between devices. `prepare` runs before any screen shows the account (restore).
+ */
+export async function openGoogleAccount(email: string, name: string, prepare?: (isNew: boolean) => Promise<void>): Promise<void> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.trim().toLowerCase())));
+  const id = `g-${[...digest.slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+  await release();
+  const existing = await getRecord(id);
+  const isNew = !existing || existing.kind !== 'google' || !existing.deviceKey;
+  const now = Date.now();
+  const rec: AccountRecord = isNew
+    ? { id, name: cleanName(name, await listAccounts()), email, kind: 'google', createdAt: now, lastUsedAt: now, autoLockMinutes: DEFAULT_AUTO_LOCK_MINUTES, kdf: null, wrapped: null, deviceKey: await generateDeviceKey(), failedAttempts: 0, lastFailedAt: null }
+    : existing;
+  if (isNew) await putRecord(rec);
+  const key = rec.deviceKey as CryptoKey;
+  setUnlocked({ accountId: id, key });
+  try {
+    if (isNew) await adoptLegacyData().catch(() => false); // old data stays where it was if this fails
+    await prepare?.(isNew);
+  } catch (err) {
+    setUnlocked(null);
+    throw err;
+  }
   await activate(rec, key);
 }
 

@@ -11,6 +11,7 @@ import {
   legacyDataStatus,
   listAccounts,
   openEncryptedBackup,
+  openGoogleAccount,
   passwordProblem,
   rememberedAccountId,
   unlockAccount,
@@ -41,6 +42,8 @@ export function AccountScreen() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -73,6 +76,27 @@ export function AccountScreen() {
     } catch (err) {
       setDemoError(errorText(err));
       setDemoBusy(false);
+    }
+  };
+
+  // Google accounts: the same address always opens the same account, and a new
+  // device restores the latest Drive backup before the app opens.
+  const continueWithGoogle = async () => {
+    setGoogleBusy(true);
+    setGoogleError(null);
+    try {
+      const s = await connectGoogle();
+      if (!s.email) throw new Error('Google didn’t share your email address, so PocketRehab couldn’t match your account. Please try again.');
+      const fallbackName = s.email.split('@')[0] ?? 'You';
+      await openGoogleAccount(s.email, s.name ?? fallbackName, async (isNew) => {
+        if (!isNew) return;
+        const file = await findBackup(s);
+        const data = file ? await downloadBackup(s, file) : null;
+        if (data && !isEncryptedBackup(data)) await importAllData(data);
+      });
+    } catch (err) {
+      setGoogleError(errorText(err));
+      setGoogleBusy(false);
     }
   };
 
@@ -119,10 +143,21 @@ export function AccountScreen() {
         intro={
           view.restore
             ? `Choose a name and password. The backup “${view.restore.from}” is restored into this account, encrypted.`
-            : 'Follow your clinician’s plan at home with on-device movement tracking. Everything you record is encrypted with your password and stays in this browser.'
+            : 'Follow your clinician’s plan at home with on-device movement tracking. Sign in with Google to keep your progress backed up and with you on every device, or make a private account that stays in this browser.'
         }
         back={accounts.length ? () => setView({ kind: 'list' }) : undefined}
       >
+        {view.restore || !googleConfigured() ? null : (
+          <div className="mb-8">
+            <GoogleButton busy={googleBusy} onClick={() => void continueWithGoogle()} />
+            {googleError ? <p className="mt-2 text-sm font-semibold text-alert" role="alert">{googleError}</p> : null}
+            <p className="mt-6 flex items-center gap-3 text-sm text-ink-3" aria-hidden>
+              <span className="h-px flex-1 bg-rule" />
+              or make a private account on this device
+              <span className="h-px flex-1 bg-rule" />
+            </p>
+          </div>
+        )}
         {hasAccounts || view.restore ? null : (
           <p className="-mt-2 mb-8 text-ink-2">
             Just looking around?{' '}
@@ -164,13 +199,13 @@ export function AccountScreen() {
           <li key={a.id} className="animate-rise" style={{ animationDelay: `${Math.min(i, 6) * 40}ms` }}>
             <button
               type="button"
-              onClick={() => (a.kind === 'guest' ? void openDemo() : setView({ kind: 'unlock', account: a }))}
+              onClick={() => (a.kind === 'guest' ? void openDemo() : a.kind === 'google' ? void continueWithGoogle() : setView({ kind: 'unlock', account: a }))}
               className="group flex w-full items-center gap-4 rounded-[var(--radius-card)] px-2 py-3 text-left transition-colors duration-150 hover:bg-surface-2/70"
             >
               <AccountTab account={a} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-headline">{a.name}</span>
-                <span className="block text-callout text-ink-2">{a.kind === 'guest' ? 'Sample data · no password' : `Last opened ${relativeDay(a.lastUsedAt)}`}</span>
+                <span className="block text-callout text-ink-2">{a.kind === 'guest' ? 'Sample data · no password' : a.kind === 'google' ? `Google · ${a.email ?? ''}` : `Last opened ${relativeDay(a.lastUsedAt)}`}</span>
               </span>
               <ChevronRight aria-hidden className="size-5 text-ink-3 transition-transform duration-200 ease-[var(--ease-out)] group-hover:translate-x-0.5" />
             </button>
@@ -183,6 +218,7 @@ export function AccountScreen() {
         <ActionRow icon={<CloudDownload aria-hidden className="size-5" />} title="Restore a backup" detail="From Google Drive or a backup file." onClick={() => setView({ kind: 'restore' })} />
       </div>
       {demoError ? <p className="mt-3 text-sm font-semibold text-alert" role="alert">{demoError}</p> : null}
+      {googleError ? <p className="mt-3 text-sm font-semibold text-alert" role="alert">{googleError}</p> : null}
     </Frame>
   );
 }
@@ -239,8 +275,8 @@ function DataPromise() {
           <dd className="mt-1.5 text-ink-2">Your password unlocks a key that seals every record. Without it, the data on this device can’t be read by anyone, including us.</dd>
         </div>
         <div>
-          <dt className="text-headline">Nothing to sign up for</dt>
-          <dd className="mt-1.5 text-ink-2">No email, no server, no tracking. The account lives in this browser, and the camera video never leaves it.</dd>
+          <dt className="text-headline">Google or private, your choice</dt>
+          <dd className="mt-1.5 text-ink-2">With Google, a backup goes to a private app folder in your own Drive so you can pick up on any device. Either way there are no ads or tracking, and the camera video never leaves your device.</dd>
         </div>
         <div>
           <dt className="text-headline">No password reset</dt>
@@ -525,5 +561,24 @@ function RestorePanel({ onPlainBackup }: { onPlainBackup: (bundle: unknown, from
         </p>
       ) : null}
     </div>
+  );
+}
+
+function GoogleButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className="flex h-13 w-full items-center justify-center gap-3 rounded-[var(--radius-control)] border border-ink/25 bg-surface px-4 text-headline text-ink transition-colors duration-150 hover:border-ink/50 hover:bg-white disabled:cursor-wait disabled:opacity-70"
+    >
+      <svg aria-hidden viewBox="0 0 48 48" className="size-5">
+        <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
+        <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+        <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+        <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
+      </svg>
+      {busy ? 'Opening Google…' : 'Continue with Google'}
+    </button>
   );
 }
