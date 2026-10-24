@@ -2,7 +2,7 @@
 
 A free app that helps you do your physical therapy exercises at home, correctly. It uses your phone or laptop camera to count repetitions, measure joint angles and check your form as you move, then turns each session into progress you and your therapist can read.
 
-**Open the app: [PocketRehab]([(https://sanjayk57.github.io/PocketRehab/)])**
+**Open the app: https://sanjayk57.github.io/PocketRehab/**
 
 Built by Sanjay Koripelli for the 2026 Congressional App Challenge (KY-3).
 
